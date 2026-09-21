@@ -109,6 +109,16 @@ public class CombiMapController extends DisplayControllerEvo implements NaviMoKo
         if (modelupdateevent.getModelId() == ICoreNaviModelBank.NAV_VIEW_SIZE_CHOICE) {
             this.onViewSizeChanged();
         } else if (this.kombiTerminal != 0) {
+            /* NAV_VIEW_SIZE_CHOICE is not delivered for every stage change on every skin (measured
+             * on B9/Classic: toggling the Audi View button often raises no NAV_VIEW_SIZE_CHOICE
+             * update at all while CarPlay owns the cluster).  applyNow() derives the stage purely
+             * from that flag, so a missed update leaves the overlay on the previous stage's anchor
+             * - the popup anchor in an in-tube view, i.e. visibly too far up and right.
+             *
+             * Re-read the model on the updates that DO arrive.  setViewAreaMode() early-returns
+             * when the value is unchanged, so this is a compare on the common path and behaves
+             * exactly as before wherever the dedicated update is delivered reliably. */
+            this.syncViewAreaMode();
             /* cluster terminal: on A5 (KDK via displayables) recompute the KDK layout, then switch
              * context; other variants only need the context + frame-rate update. */
             if (this.framework.getSysConst(SYSCONST_KOMBI_VARIANT) == KOMBI_KDK_VIA_DISPLAYABLES) {
@@ -121,6 +131,28 @@ public class CombiMapController extends DisplayControllerEvo implements NaviMoKo
         } else {
             this.handleKdk(modelupdateevent);   // MAIN terminal (G24)
         }
+    }
+
+    /**
+     * Refresh the cached view-area stage from the stock model without touching stock map geometry.
+     *
+     * <p>Deliberately lighter than {@link #onViewSizeChanged()}: it does not call {@code positionMap},
+     * because stock keeps its own map planes in step through its own path - only the CarPlay overlay
+     * needs the stage. Runs on the stock model-update thread, so it stays a model read plus an int
+     * compare; the {@code reapply()} only happens on an actual change, exactly as before.
+     */
+    private void syncViewAreaMode() {
+        if (this.kombiTerminal == 0 || hmiService == null) {
+            return;
+        }
+        HMIModel model = hmiService.getModel(ICoreNaviModelBank.NAV_VIEW_SIZE_CHOICE);
+        if (!(model instanceof ChoiceModelGUI)) {
+            return;   /* unknown model type: keep the last known stage rather than guessing one */
+        }
+        com.luka.carplay.core.ScreenModule.setViewAreaMode(
+            ((ChoiceModelGUI) model).getValue() == 1
+                ? com.luka.carplay.core.ScreenModule.VIEWAREA_SMALLSCREEN
+                : com.luka.carplay.core.ScreenModule.VIEWAREA_FULLSCREEN);
     }
 
     private void onViewSizeChanged() {
