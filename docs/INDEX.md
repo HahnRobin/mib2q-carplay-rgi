@@ -10,7 +10,7 @@ Map of Content for the reverse-engineering and implementation notes. Each note c
 every factual claim is validated against a source (code / firmware / iOS binary) and states only the
 final verified fact. `reconciles:` frontmatter records which legacy docs were folded in.
 
-> **All topics seeded [x]** - 31 notes. `(!)` items inside notes are real product TODOs, not doc gaps.
+> **All topics seeded [x]** - 32 notes. `(!)` items inside notes are real product TODOs, not doc gaps.
 
 ## [architecture](architecture.md) - process topology, threading, boot / init - build, test & deploy  [x]
 
@@ -41,7 +41,8 @@ final verified fact. `reconciles:` frontmatter records which legacy docs were fo
 - [steering-wheel](input/steering-wheel.md) - MFW roller: rotation = stock zoom, press = route-info toggle
 
 ## Deploy  [x]
-- [supervisor-lifecycle](deploy/supervisor-lifecycle.md) - install map (what goes where), smartphone_integrator, renderer ownership
+- [install](deploy/install.md) - release contents, M.I.B. installer, manual SSH install, verify, uninstall
+- [supervisor-lifecycle](deploy/supervisor-lifecycle.md) - smartphone_integrator, renderer ownership, USB pre-SETUP recovery
 - [connect](deploy/connect.md) - USB / NCM / Bonjour connect flow + failure root cause
 - [session-lifecycle](deploy/session-lifecycle.md) - session audit: watchdog-hang, USB pre-RTSP class, resilience risks R1-R4
 
