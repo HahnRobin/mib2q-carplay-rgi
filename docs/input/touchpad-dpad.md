@@ -3,7 +3,7 @@ title: MMI touchpad -> DPAD bridge
 tags: [input, touchpad, verified]
 status: verified-source
 sources:
-  - code: java_patch/com/luka/carplay/cursor/CursorController.java
+  - code: java_patch/com/luka/carplay/input/TouchpadController.java
   - code: java_patch/de/audi/app/terminalmode/dsi/carplay/CarplayDSILifecycleController.java
 ---
 
@@ -15,11 +15,11 @@ the only input device stock leaves unbridged** - this patch adds the missing leg
 ## Context
 
 > touchpad `updateTouchEvents` -> `TerminalModeDSIKeyEventsController` (class-replaced) ->
-> **CursorController** -> stock DSI `postDpad` -> CarPlay session.
+> **TouchpadController** -> stock DSI `postDpad` -> CarPlay session.
 
 ## Model
 
-`CursorController` (legacy name - it once drove an on-screen cursor, abandoned because the H.264
+`TouchpadController` (formerly `CursorController` - it once drove an on-screen cursor, abandoned because the H.264
 encoder ghosted the overlay through motion compensation). A single-finger drag accumulates signed
 `deltax / deltay` since the last emit; whenever `|deltax|` or `|deltay|` crosses a **speed-adaptive threshold** it
 emits a `KEY_DPAD_*` press+release pair and subtracts the threshold from that accumulator.
@@ -35,7 +35,7 @@ emits a `KEY_DPAD_*` press+release pair and subtracts the threshold from that ac
 ## Wiring
 
 `TerminalModeDSIKeyEventsController` (class-replacement) calls `installCursorTouchSink()` on CarPlay
-start and routes `CursorController`'s `postDpad(KEY_DPAD_*)` back through the stock DSI bridge
+start and routes `TouchpadController`'s `postDpad(KEY_DPAD_*)` back through the stock DSI bridge
 (`KEY_DPAD_LEFT/RIGHT/UP/DOWN` are the module's own 1/2/3/4 codes, re-emitted as DSI directional keys)
 into the CarPlay session. The sink is removed on disconnect (`setTouchSink(null)`).
 

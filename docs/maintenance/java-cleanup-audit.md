@@ -116,7 +116,7 @@ CarPlay owns it, called from `CombiMapController` and `ClusterService`. Keep it.
   into them outside local reachability.
 - `CarplayBus` (:19810) and `RendererServer` (:19800) - different peers/protocols.
 - `RgdModule`, `FrameworkRef.ServiceHandle`, `Module` - ordered lifecycle + paired OSGi release.
-- `CursorController`, mapper classes, lane fallback.
+- `TouchpadController`, mapper classes, lane fallback.
 - The cover-art replacement/provider/mux chain (live; intentionally preserves the stock provider).
 - Trip-summary ETA helpers (`lastEtaSeconds`, `lastTimeRemainingSeconds`,
   `lastTimeRemainingSampleSeconds`, `currentRemainingSeconds()`, `currentArrivalSeconds()`) - they

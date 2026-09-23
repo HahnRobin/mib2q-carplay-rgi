@@ -4,7 +4,6 @@ tags: [cluster, kdk, geometry, verified]
 status: verified-source
 sources:
   - code: java_patch/com/luka/carplay/cluster/ClusterLayerController.java
-  - code: java_patch/com/luka/carplay/cluster/ClusterGeomOverride.java
   - firmware: LayoutMIB2HighB9 / B9Sport / Q7 (Layout.getIntegerConstant)
   - firmware: VC AU491 gtf2 (SV_LVDS_KDK)
 reconciles:
@@ -66,8 +65,3 @@ its backing have no view-size dependency (`positionKDKBackgrounds` / `handleKdkD
 view size). Moving the panel by -476 in Sport singlescreen was measured on the car to break a view
 the stock keeps correct, so `ClusterLayerController` **logs the offset but never applies it** to the
 panel.
-
-## Live tuning
-
-`ClusterGeomOverride.poll()` reads an optional `/tmp/cluster_geom.cfg`; a saved file takes effect
-within one reconcile tick (no restart). Absent file = pure stock layout.

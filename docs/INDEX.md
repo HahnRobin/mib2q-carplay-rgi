@@ -34,7 +34,7 @@ final verified fact. `reconciles:` frontmatter records which legacy docs were fo
 - [kdk-geometry](cluster/kdk-geometry.md) - KDK backings 101/102, stages, HU-side geometry table
 
 ## Input  [x]
-- [touchpad-dpad](input/touchpad-dpad.md) - MMI touchpad -> DPAD bridge (CursorController)
+- [touchpad-dpad](input/touchpad-dpad.md) - MMI touchpad -> DPAD bridge (TouchpadController)
 - [steering-wheel](input/steering-wheel.md) - MFW roller: rotation = stock zoom, press = route-info toggle
 
 ## Deploy  [x]
