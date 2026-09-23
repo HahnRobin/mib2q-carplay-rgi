@@ -11,14 +11,6 @@ CarPlay patch set for Audi MHI2Q infotainment.
   <img src="assets/gallery/maneuver_demo.gif" width="90%" /><br />
   <sub>Cluster maneuver renderer driven through a demo route</sub>
 </p>
-<p align="center">
-  <img src="assets/gallery/IMG_0623.jpeg" width="45%" />
-  <img src="assets/gallery/IMG_6299.jpeg" width="45%" />
-</p>
-<p align="center">
-  <img src="assets/gallery/IMG_6302.jpeg" width="45%" />
-  <img src="assets/gallery/IMG_0599.jpeg" width="45%" />
-</p>
 
 **Virtual Cockpit: route guidance from the maneuver renderer**
 
@@ -36,6 +28,14 @@ CarPlay patch set for Audi MHI2Q infotainment.
 <p align="center">
   <img src="assets/gallery/pdc_over_carplay.jpeg" width="45%" />
   <img src="assets/gallery/cover_art.jpeg" width="45%" />
+</p>
+
+**Head-up display**
+
+<p align="center">
+  <img src="assets/gallery/IMG_0623.jpeg" width="30%" />
+  <img src="assets/gallery/IMG_6302.jpeg" width="30%" />
+  <img src="assets/gallery/IMG_0599.jpeg" width="30%" />
 </p>
 
 ## Contents
