@@ -112,7 +112,9 @@ Then run from this repository's root:
 ```
 
 All three build in Docker - no host toolchain required. The Java patch compiles in a pinned
-`eclipse-temurin:8` container (against the stock jar + OSGi libs under `../../Tools/jxe2jar`); the two
+`eclipse-temurin:8` container (against the stock jar + OSGi libs under `../../Tools/jxe2jar`; the
+scripts expect the author's `out/MU1316-final.jar`, so if your own stock jar is named or located
+differently, adjust the path in `scripts/build_java.sh` and the test scripts); the two
 native builds use the `qnx65-armv7-toolchain` image and synthesize their import stubs, so the resulting
 ELF binds the unit's real Screen/EGL/GLES libraries at runtime. The renderer's C++ scene engine is
 built with that image's `g++` and must not pull in the C++ runtime; the hook build rejects any dynamic
