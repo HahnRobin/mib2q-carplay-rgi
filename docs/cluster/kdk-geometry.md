@@ -76,6 +76,31 @@ Classic overrides **only** 58/59/60/61; everything else falls through to Q7.
   fallback Sport table is used only before the first stock model update. Every distinct decision is
   logged once (`ClusterLayers apply ...`).
 
+## ⚠️ `NAV_VIEW_SIZE_CHOICE` is not raised for every stage change
+
+> `status: verified-on-car` - Audi MHI2Q `MHI2Q_US_AUG22_P5087` (NAR G22), `LayoutMIB2HighB9`
+> (measured by complex256, PR #15).
+
+On **Classic (B9)** the Audi View button frequently raises **no** `NAV_VIEW_SIZE_CHOICE` update while
+CarPlay owns the cluster - the stock map restages, but the model event never arrives. A stage derived
+from that flag alone then goes stale and the panel keeps the *other* stage's anchor: the popup anchor
+`(1091,110)` in an in-tube view sits **36 px right and 97 px up** of the in-tube anchor `(1055,207)`,
+i.e. "too far up and right".
+
+This branch covers it twice:
+
+- `ClusterLayerController` takes the stage from the VC's own **FctID 54** (`onVcPresentation`) while
+  CarPlay owns the cluster; the view-size flag is only the fallback before the first Fct54.
+- `CombiMapController.syncViewSize()` re-reads the choice model on every KDK update that *does* arrive
+  (A5 / KDK via displayables); it compares against the cache, so a skin whose dedicated update is
+  delivered reliably (Sport) does no extra work.
+
+Both stage anchors in the table above are correct as they stand - a stale stage is not a geometry
+problem, and tuning the anchors to compensate for one will mis-place the other. In the log, the
+`ClusterLayers apply` line prints `view=` and `stage=` together: a `view=single stage=popup` (or the
+reverse) pairing is a stale stage, a matched pairing with a visibly wrong position is genuinely
+geometry.
+
 ## ⚠️ Do NOT apply the small-stage offset (80/81) to the KDK panel
 
 Stock adds the `-476,0` Sport singlescreen offset to the **map planes 33/58 only**. The KDK panel and
