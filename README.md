@@ -31,6 +31,13 @@ CarPlay patch set for Audi MHI2Q infotainment.
   <img src="assets/gallery/vc_lane_guidance.jpeg" height="200" />
 </p>
 
+**Audi front PDC no longer hides CarPlay** · **Cover art on the cluster**
+
+<p align="center">
+  <img src="assets/gallery/pdc_over_carplay.jpeg" width="45%" />
+  <img src="assets/gallery/cover_art.jpeg" width="45%" />
+</p>
+
 ## Contents
 
 - [Gallery](#gallery)
