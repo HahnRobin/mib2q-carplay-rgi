@@ -56,7 +56,7 @@ iAP2 NCM accessory with only one of its two interfaces enabled. Renderer ownersh
 is handled independently by the PID-snapshot cleanup and must not be used as a
 reason to shorten the USB/device-stack delay.
 
-## MU1316 QNX 6.5 compatibility audit
+## 🔍 MU1316 QNX 6.5 compatibility audit
 
 The supervisor deliberately uses only facilities present in the extracted P5087
 firmware:

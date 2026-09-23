@@ -18,21 +18,23 @@ reconciles:
 
 # KOMO widget video & gfxAvailable gate
 
-The stock cluster video pipeline (which [[compositing]] hooks into) and the flag that lets the VC
+The stock cluster video pipeline (which [compositing](../../cluster/compositing.md) hooks into) and the flag that lets the VC
 actually show it.
 
-## Pipeline
+## 🧭 Pipeline
 
 ```mermaid
 flowchart LR
+    accTitle: KOMO widget video pipeline
+    accDescr: PresentationController renders to a framebuffer that videoencoderservice captures, encodes to H.264 and MPEG-TS, and sends over MLB ISO and MOST to the VC LVDS input.
     pc["PresentationController<br/>renders -> framebuffer (displayable)"] --> ipte["videoencoderservice<br/>IPTE capture"]
     ipte --> h264["QC OMX H.264"] --> ts["MPEG-TS"] --> iso["MLB ISO"] --> most(["MOST"]) --> vc["VC LVDS"]
 ```
 
-## Widget size - komoviewstyle
+## 📊 Widget size - komoviewstyle
 
 Widget render size comes from `komoviewstyle.conf`. The current MHI2Q FPK cluster widget is
-**`KVS_FPK`** - DSI 2 = **210x153**, DSI 3 = **328x181** (agrees with [[compositing]]). Other styles:
+**`KVS_FPK`** - DSI 2 = **210x153**, DSI 3 = **328x181** (agrees with [compositing](../../cluster/compositing.md)). Other styles:
 `KVS_Most` **800x252** (MOST display, DSI 1), `KVS_RGI` **263x366** (old MIB1 style, DSI 255);
 DSI 4-7 = `KVS_Invalid`.
 
@@ -41,7 +43,7 @@ DSI 4-7 = `KVS_Invalid`.
 assignment** in this build's `komoviewstyle.conf`. There is no `363x260` size anywhere in the
 firmware - the earlier "KVS_RGI2 363x260" claim was wrong (a scramble of RGI's 263x366).
 
-## The gfxAvailable gate
+## 🔍 The gfxAvailable gate
 
 The VC only transitions to LVDS map view (`SV_LVDS_NavMap_FPK`) when **`gfxAvailable=true`** - else the
 video never shows even though it is encoded and sent. The flag is driven by the KOMO GFX-stream-sink
@@ -50,6 +52,8 @@ machine to the map view:
 
 ```mermaid
 flowchart LR
+    accTitle: KOMO gfxAvailable display gate
+    accDescr: The GFX-state DSI attribute sets gfxAvailable in KOMOService; only with gfxAvailable and LVDS_Available both true does the VC enter the NavMap FPK view, otherwise the video is sent but not shown.
     ves["videoencoderservice"] --> sink["DSIKOMOGfxStreamSink<br/>(org.dsi.ifc.komogfxstreamsink)"]
     sink -->|"GFX-state DSI attr"| ks["KOMOService.updateGfxState(i,j)<br/>if j==1 -> gfxAvailable = (i==1)"]
     ks --> gate{"gfxAvailable=true<br/>AND LVDS_Available=1?"}
@@ -65,11 +69,11 @@ Verified as strings in this extract: `DSIKOMOGfxStreamSink` (traceConfig.propert
 in this firmware dump, so treat those exact names as inferred. None of this chain lives in
 `libPresentationController.so`.
 
-## Relevance to the patch
+## ⚙️ Relevance to the patch
 
 On this branch the cluster keeps showing the **stock native map** (its own MOST video path), and our
-maneuver plane is composited into that stream ([[compositing]]), so the patch does not need to drive
+maneuver plane is composited into that stream ([compositing](../../cluster/compositing.md)), so the patch does not need to drive
 the gfx gate itself. `BAPBridge.forceGfxAvailable` writes data rate + `gfxAvailable` only when
 `Util.isClusterMapMOST()` is true and is a no-op on the FPK cluster; forcing the data rate there parked
-the stock kombi map in its hidden context (see [[java-cleanup-audit]]). Context 80 is selected on the
-RGI BAP start, not on a renderer first-frame handshake ([[rgd-activation]], [[display-contexts]]).
+the stock kombi map in its hidden context (see [java-cleanup-audit](../../maintenance/java-cleanup-audit.md)). Context 80 is selected on the
+RGI BAP start, not on a renderer first-frame handshake ([rgd-activation](../../rgd/rgd-activation.md), [display-contexts](../../cluster/display-contexts.md)).

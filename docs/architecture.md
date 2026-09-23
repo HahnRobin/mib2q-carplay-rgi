@@ -13,35 +13,35 @@ reconciles:
 
 # Architecture - process topology & threading
 
-The one-page overview; each subsystem has its own note. Start at [[INDEX]].
+The one-page overview; each subsystem has its own note. Start at [INDEX](INDEX.md).
 
-## What the patch does
+## 📋 What the patch does
 
 Production implementation for Audi MHI2Q (MU1316, QNX 6.5 ARMv7) - stock `libairplay.so` 210.81 kept
 throughout:
 
-- **Route guidance** - full HUD/BAP maneuver state ([[rgd-activation]] - [[bap-fctids]]) plus a custom
-  3D maneuver overlay drawn over the native cluster map ([[maneuver-renderer]] - [[compositing]]):
-  arrow-fill distance progress ([[bargraph-sync]]), lane strip ([[lane-guidance]]) and scrolling VC
-  route text ([[vc-route-text]]).
-- **Cover art** - album art forwarded to the VC now-playing widget ([[cover-art]]).
-- **Touchpad input** - MMI touchpad drag bridged to DPAD navigation ([[touchpad-dpad]]); steering-wheel
-  roller press toggles cluster route-info ([[steering-wheel]]).
+- **Route guidance** - full HUD/BAP maneuver state ([rgd-activation](rgd/rgd-activation.md) - [bap-fctids](rgd/bap-fctids.md)) plus a custom
+  3D maneuver overlay drawn over the native cluster map ([maneuver-renderer](cluster/maneuver-renderer.md) - [compositing](cluster/compositing.md)):
+  arrow-fill distance progress ([bargraph-sync](rgd/bargraph-sync.md)), lane strip ([lane-guidance](rgd/lane-guidance.md)) and scrolling VC
+  route text ([vc-route-text](rgd/vc-route-text.md)).
+- **Cover art** - album art forwarded to the VC now-playing widget ([cover-art](hook/cover-art.md)).
+- **Touchpad input** - MMI touchpad drag bridged to DPAD navigation ([touchpad-dpad](input/touchpad-dpad.md)); steering-wheel
+  roller press toggles cluster route-info ([steering-wheel](input/steering-wheel.md)).
 
 The maneuver overlay (`maneuver_render`, displayable 98, transparent when idle) composites over the
 head unit's own native map (33): stock ctx 74 at rest, custom ctx 80 `{98,101,102,33}` only while
 guidance is active (held after route end until the VC has faded its KDK out). Base CarPlay stays
 byte-identical to stock.
 
-## Components
+## ⚙️ Components
 
 | Component | Type | Output | Topic |
 |---|---|---|---|
-| `hook/` | C (ARM32 QNX), `LD_PRELOAD` into `dio_manager`; exports exactly 5 interposers | `libcarplay_hook.so` | [[iap2-interception]] [[cover-art]] [[integration-seam]] |
-| `java_patch/` + `java_resources/` | Java 1.4 class overrides loaded by the HMI (`lsd`) + VC glyph table | `carplay_hook.jar` | [[rgd-activation]] [[display-contexts]] [[touchpad-dpad]] |
-| `maneuver_render/` | C EGL/GLES2 + C++11 scene engine (ARM QNX / macOS) | `maneuver_render` | [[maneuver-renderer]] [[compositing]] |
+| `hook/` | C (ARM32 QNX), `LD_PRELOAD` into `dio_manager`; exports exactly 5 interposers | `libcarplay_hook.so` | [iap2-interception](hook/iap2-interception.md) [cover-art](hook/cover-art.md) [integration-seam](hook/integration-seam.md) |
+| `java_patch/` + `java_resources/` | Java 1.4 class overrides loaded by the HMI (`lsd`) + VC glyph table | `carplay_hook.jar` | [rgd-activation](rgd/rgd-activation.md) [display-contexts](cluster/display-contexts.md) [touchpad-dpad](input/touchpad-dpad.md) |
+| `maneuver_render/` | C EGL/GLES2 + C++11 scene engine (ARM QNX / macOS) | `maneuver_render` | [maneuver-renderer](cluster/maneuver-renderer.md) [compositing](cluster/compositing.md) |
 
-## Process topology
+## 🗂️ Process topology
 
 ```text
 smartphone_integrator            (boot-resident; spawns on phone connect)
@@ -53,19 +53,21 @@ Java patch (lsd.jxe, alive from boot)
   +- CarplayBus server            TCP 127.0.0.1:19810  (hook <-> Java)
 ```
 
-`LD_PRELOAD` is scoped to `dio_manager` only. See [[supervisor-lifecycle]] for ownership and
-[[bus-protocol]] for the hook<->Java link.
+`LD_PRELOAD` is scoped to `dio_manager` only. See [supervisor-lifecycle](deploy/supervisor-lifecycle.md) for ownership and
+[bus-protocol](hook/bus-protocol.md) for the hook<->Java link.
 
-## Boot / init
+## 🚀 Boot / init
 
 `dio_manager` is **not** spawned at boot - `smartphone_integrator` launches it on phone connect, so
 the hook constructor fires only then. The HMI (`lsd.jxe`) starts at boot, so the Java bus server is
-already `accept()`ing when the hook connects. Connect sequence: [[connect]].
+already `accept()`ing when the hook connects. Connect sequence: [connect](deploy/connect.md).
 
-## Data flow (steady state)
+## 🧭 Data flow (steady state)
 
 ```mermaid
 flowchart LR
+    accTitle: Steady-state data flow
+    accDescr: The hook forwards iPhone iAP2 route guidance and cover art over CarplayBus to the Java patch, which drives maneuver_render and the Virtual Cockpit via BAP; the VC reports visibility and stage back, and the touchpad feeds Java.
     ip["iPhone iAP2"] --> hook["hook (dio_manager)"]
     hook -->|EVT_RGD_UPDATE| bus["CarplayBus :19810"]
     hook -->|EVT_COVERART| bus
@@ -77,17 +79,17 @@ flowchart LR
     pad["MMI touchpad"] --> java
 ```
 
-## Threading (highlights)
+## 🔄 Threading (highlights)
 
 - **hook**: iAP2 thread (recv/read hooks) - cover-art worker - bus connector/writer - 1 Hz timer.
 - **Java**: HMI EDT - `carplay-bus` (bus server IO, + `carplay-bus-writer`/`carplay-bus-reader`) -
-  `carplay-cluster-switch` (single DM writer, [[display-contexts]]) - `carplay-rgi-presentation`
-  (RouteGuidance worker: retry, viewport, route-text scroll ticks) - `BAPActionBlink` ([[bargraph-sync]]) -
+  `carplay-cluster-switch` (single DM writer, [display-contexts](cluster/display-contexts.md)) - `carplay-rgi-presentation`
+  (RouteGuidance worker: retry, viewport, route-text scroll ticks) - `BAPActionBlink` ([bargraph-sync](rgd/bargraph-sync.md)) -
   `RendererServer` accept/read + writer.
 - **renderer**: EGL draw loop - TCP client to Java - progress watchdog thread
-  ([[maneuver-renderer]]); no dmdt on this branch.
+  ([maneuver-renderer](cluster/maneuver-renderer.md)); no dmdt on this branch.
 
-## Build & deploy (quickref)
+## 🔧 Build & deploy (quickref)
 
 ```sh
 ./scripts/build_java.sh        # -> build/carplay_hook.jar    (eclipse-temurin:8 Docker)
@@ -102,7 +104,7 @@ renderer's `scene/` is C++11 compiled with the image's `g++` into `build/libmane
 runtime allowed). The native builds synthesize import stubs; the resulting ELF binds the unit's real
 Screen/EGL/GLES libs at runtime. `build_hook.sh` also enforces the 5-symbol export allowlist.
 
-## Tests (host only, no HU)
+## 🧪 Tests (host only, no HU)
 
 ```sh
 ./scripts/run_tests.sh            # C: RGD TLV parser, bus transport, signal guard, state trace, protocol constants
@@ -120,9 +122,9 @@ Deploy by copying the runtime files to `/mnt/app/root/hooks/`, pointing `smartph
 at `carplay_child.json`, and dropping `carplay_hook.jar` into `/mnt/app/eso/hmi/lsd/jars/`.
 Separately, the RGD message IDs (0x5200/0x5203 sent, 0x5201/0x5202/0x5204 received) must be registered
 in `dio_manager.json` (`MessagesSentByAccessory` / `MessagesReceivedFromDevice`). Then reboot - there
-is no one-shot flasher. Runtime integration + install paths: [[supervisor-lifecycle]].
+is no one-shot flasher. Runtime integration + install paths: [supervisor-lifecycle](deploy/supervisor-lifecycle.md).
 
-## Reverse-engineering references
+## 📚 Reverse-engineering references
 
-iOS: [[accessoryd-rgd]] - [[carkitd-bonjour]] - [[maps-maneuvers]]. Firmware:
-[[display-manager]] - [[komo-widget-video]] - [[dsi-carkombi]].
+iOS: [accessoryd-rgd](re/ios/accessoryd-rgd.md) - [carkitd-bonjour](re/ios/carkitd-bonjour.md) - [maps-maneuvers](re/ios/maps-maneuvers.md). Firmware:
+[display-manager](re/firmware/display-manager.md) - [komo-widget-video](re/firmware/komo-widget-video.md) - [dsi-carkombi](re/firmware/dsi-carkombi.md).

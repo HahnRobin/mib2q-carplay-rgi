@@ -12,13 +12,13 @@ reconciles:
 
 # Maps - accNav maneuver enum & signed exit angle
 
-The Apple-side source of the maneuver values our hook consumes. Backs [[maneuver-mapping]].
+The Apple-side source of the maneuver values our hook consumes. Backs [maneuver-mapping](../../rgd/maneuver-mapping.md).
 
-## Context
+## 📋 Context
 
-> Maps accNav -> iAP2 0x5202 type/angle -> [[rgd-tlv]] -> [[maneuver-mapping]] -> BAP.
+> Maps accNav -> iAP2 0x5202 type/angle -> [rgd-tlv](../../rgd/rgd-tlv.md) -> [maneuver-mapping](../../rgd/maneuver-mapping.md) -> BAP.
 
-## U-turn family
+## 🔄 U-turn family
 
 `+[CarClusterUpdateManeuverInfo _enumProperties]` initializes the accNav name dictionary. Verified
 values:
@@ -37,7 +37,7 @@ plain GEO direction-enum numbers, not shifted.
 `_accNavManeuverTypeForGEOManeuverType:` maps GEO 1-88 to accNav via a 16-bit table. Notable: GEO 25->18,
 35->26, **86/88->4** (collapsed). So types 4/18/26 need a **signed** direction; 86/88 forward their angle.
 
-## Signed `JunctionElementExitAngle`
+## 📊 Signed `JunctionElementExitAngle`
 
 Both builders (`maneuverUpdateWithStep:` and `maneuverUpdateWithGuidanceEvent:`) select the role-2
 element, and for GEO type 4 normalize the sign by traffic side, ending in an `FNEG`, then
@@ -58,13 +58,13 @@ with role 1 are skipped; role != 1,2 are pushed to the `junctionElementAngle` ar
 - HU side: `rgd_tlv.c` reads TLV 0x0B as signed BE16 and publishes it as both `turn_angle` and
   `exit_angle`, so the sign reaches `ManeuverMapper` and the renderer intact.
 
-## Sentinel
+## 📌 Sentinel
 
 Apple Maps 26.6 **does not** synthesize angle 1000. The `0/+/-1000 = absent` sentinel is our own
-convention ([[maneuver-mapping]]); reading the sign is Apple's primary rule, with `drivingSide` the
+convention ([maneuver-mapping](../../rgd/maneuver-mapping.md)); reading the sign is Apple's primary rule, with `drivingSide` the
 fallback when no role-2 angle is present.
 
-## Decompile anchors (iOS 26.6, 23G71)
+## 📚 Decompile anchors (iOS 26.6, 23G71)
 
 Maps executable, imagebase `0x100000000`:
 

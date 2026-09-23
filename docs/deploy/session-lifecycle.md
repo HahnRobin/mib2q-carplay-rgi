@@ -18,20 +18,20 @@ reconciles:
 
 # CarPlay session lifecycle & resilience risks
 
-## Context
+## 📋 Context
 
 > `smartphone_integrator` (phone connect) -> **carplay_startup.sh** -> monitor + `exec dio_manager`
-> owns the lifecycle: see [[supervisor-lifecycle]] for renderer ownership/USB recovery and [[connect]]
-> for why the NCM link churns. The cluster context switch these modules drive is [[display-contexts]].
+> owns the lifecycle: see [supervisor-lifecycle](supervisor-lifecycle.md) for renderer ownership/USB recovery and [connect](connect.md)
+> for why the NCM link churns. The cluster context switch these modules drive is [display-contexts](../cluster/display-contexts.md).
 
 This note carries the **shipping-relevant** half of the RE session-lifecycle audit. The audit's
 altScreen/cluster-video findings (stream-111 RTSP, the `-6030`/`-6031` port collision, the
 loader->video Adreno handoff, the OMX back-pressure budget) are **excluded**: this branch ships **no
 cluster altScreen** - there is no `altscreen_hook`, no `altscreen_render`, no `AltScreenModule`, and
 no stream-111 listener anywhere in the tree. The cluster shows the head unit's own native map with a
-transparent [[display-contexts|maneuver overlay]] composited over it, not a decoded iOS video plane.
+transparent [maneuver overlay](../cluster/display-contexts.md) composited over it, not a decoded iOS video plane.
 
-## Watchdog hang is a separate class from any RTSP trigger
+## 🔍 Watchdog hang is a separate class from any RTSP trigger
 
 The audit's diagnostic rule survives independent of altScreen: an SI `TIMEOUT_WATCHDOG` (the
 `watchdogTimeout` fires) is a **distinct failure class** from whatever protocol-level event triggered a
@@ -51,9 +51,9 @@ What is verified here is the SI supervision envelope that bounds a hang (`carpla
 
 These are the non-thrash timings; the wrapper never restarts the Java stack, and every millisecond
 before `exec dio_manager` is taken from the 10 s startup budget - which is why renderer adoption runs
-**inside the monitor after `exec`**, not before it (see R4 and [[supervisor-lifecycle]]).
+**inside the monitor after `exec`**, not before it (see R4 and [supervisor-lifecycle](supervisor-lifecycle.md)).
 
-## Independent pre-RTSP failure class: USB enumeration [x]
+## 🔍 Independent pre-RTSP failure class: USB enumeration [x]
 
 Some "nothing starts until replug" runs fail **before** any RTSP/control SETUP: USB reports both iAP2
 interfaces matched but only one running (`drivers_matched::2` + `drivers_running::1` in
@@ -70,7 +70,7 @@ next SI-owned wrapper consumes it (`cp_usb_consume_pending_reset`) and performs 
 control SETUP or a detached/non-stuck PPS state rearms it. The monitor only ever *queues*; it never
 resets the connector under a starting/dying CarPlay process.
 
-## Captured healthy activation timeline (!)
+## 🧭 Captured healthy activation timeline (!)
 
 From `log/live_20260812_0004` - evidence that the **hook itself adds no multi-second latency**
 (sub-second from Identify to RGI injection). Only the shipping-relevant, non-altScreen spine is kept:
@@ -83,6 +83,8 @@ From `log/live_20260812_0004` - evidence that the **hook itself adds no multi-se
 
 ```mermaid
 flowchart LR
+    accTitle: Healthy activation timeline phases
+    accDescr: Activation runs in three phases: seconds of USB, SI classify and iAP2 startup, about 0.9 s of hook identify, auth and RGI injection, then a variable phone data and renderer phase.
     pre["BEFORE (seconds)<br/>USB enumerate - SI classify - iAP2 startup"]
       --> hook["HOOK (~0.9 s)<br/>Identify -> Auth -> RGI injection"]
       --> post["AFTER (variable)<br/>phone data connection - renderer / native map"]
@@ -92,7 +94,7 @@ flowchart LR
 Latency *before* this window belongs to USB/SI/iAP2 startup; latency *after* it belongs to the
 phone's data connection and the cluster renderer, never to the hook.
 
-## Resilience risks
+## ⚠️ Resilience risks
 
 Each risk is validated against current code and marked [x] (matches / class absent on this branch) or
 (!) (open, or needs an on-unit fault replay to prove).
@@ -138,7 +140,7 @@ exists (no altScreen renderer). Initial adoption of a wedged renderer uses a **1
 (`cp_kill_renderer "$SR_NAME" 1`); the **4 s** Qualcomm WFD/EGL grace is reserved for explicit system
 stop (`cp_stop_renderer_snapshot`). Ordinary `dio` churn never kills the persistent renderer at all.
 
-## Cleared as primary session killers [x]
+## ✅ Cleared as primary session killers [x]
 
 - **Java CarPlay activation** - hot TerminalMode `onActivate`/`onDeactivate` callbacks only store the
   desired generation and `notifyAll()`. A single persistent `carplay-lifecycle` daemon
@@ -151,7 +153,7 @@ stop (`cp_stop_renderer_snapshot`). Ordinary `dio` churn never kills the persist
 - **SI stop/restart timings** - `stopTimeout=8000` / `restartDelay=3000` are no longer the old
   2 s / 500 ms graphics-thrash configuration.
 
-## Ranked on-unit validation plan (!)
+## 🧪 Ranked on-unit validation plan (!)
 
 Code corrections are in; release is gated by destructive/fault timing that cannot be proven off-unit.
 altScreen-only items from the source plan are dropped.
@@ -170,7 +172,7 @@ altScreen-only items from the source plan are dropped.
    `reset port 3 250 1` on the next generation, and prove any successful SETUP or a detached/non-stuck
    PPS state rearms the latch.
 
-## Lifecycle matrix
+## 📋 Lifecycle matrix
 
 altScreen phases (RTSP control negotiation, 111/110 listener setup, active 111 video) are dropped.
 

@@ -22,15 +22,18 @@ The cluster map area is not drawn on the VC - the head unit **renders and H.264-
 ships it over a MOST isochronous channel; the VC just decodes and overlays BAP text. The patch feeds
 its maneuver graphics into that same encoder path.
 
-## Context
+## 📋 Context
 
-> [[display-contexts]] - ctx 80 selects planes -> **compositing** - HU encodes -> MOST -> VC.
-> Plane placement: [[kdk-geometry]].
+> [display-contexts](display-contexts.md) - ctx 80 selects planes -> **compositing** - HU encodes -> MOST -> VC.
+> Plane placement: [kdk-geometry](kdk-geometry.md).
 
-## The stock pipeline
+## 🔍 The stock pipeline
 
 ```mermaid
 flowchart LR
+    accTitle: Cluster video compositing pipeline
+    accDescr: On the HU the native maneuver target, the map and the transparent maneuver overlay 98 are H.264 encoded, muxed to MPEG-TS and sent over MOST isochronous to the VC, which decodes and overlays BAP text.
+
     subgraph hu["HU (MHI2Q)"]
         pc["libPresentationController<br/>(native maneuver render)"] --> rt["shared render target<br/>KVS_FPK 210x153 / 328x181"]
         our["maneuver_render -> displayable 98<br/>(transparent overlay)"]:::here --> enc
@@ -56,7 +59,7 @@ Cluster render size comes from `komoviewstyle.conf` - **DSI value -> EB style ->
 numbering (decompiled switch FUN_00638d44): `0 KVS_Invalid, 1 KVS_RGI, 2 KVS_RGI2, 3 KVS_FPK,
 4 KVS_Most, 5 KVS_Debug_MoKoInMainDisplay` - don't confuse the enum ordinal with the DSI value.
 
-## How the patch takes over
+## ⚙️ How the patch takes over
 
 - `maneuver_render` draws into **displayable 98** with `transparent=1`, so the cluster compositor
   blends it over the KDK backings and the **stock native map (33)** - not over a CarPlay video plane.
@@ -64,11 +67,11 @@ numbering (decompiled switch FUN_00638d44): `0 KVS_Invalid, 1 KVS_RGI, 2 KVS_RGI
   (`setActiveDisplayable(4, 98)` runs inside the stock context switch). The native map 33 is composed
   behind it, so the VC receives one stream = native map + our maneuver overlay.
 - Displayable 98 has no stock owner, so binding it is not a race. The old id-20 takeover / flapping
-  is gone - see [[display-contexts]].
+  is gone - see [display-contexts](display-contexts.md).
 - The renderer runs **no `dmdt`**; all context routing is Java-driven from `ScreenModule`. Renderer
-  protocol and scene engine: [[maneuver-renderer]].
+  protocol and scene engine: [maneuver-renderer](maneuver-renderer.md).
 
-## Rate
+## ⚡ Rate
 
 `setUpdateRate(terminal 1, 30)` drives the encoder while ctx 80 is active; returned to the same 30 Hz
 after the stock-restore stop/switch sequence so terminal 1 never parks at 0 FPS.

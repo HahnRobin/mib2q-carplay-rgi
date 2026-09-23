@@ -17,6 +17,9 @@ bypass the stock path - we intercept and inject side effects.
 
 ```mermaid
 flowchart LR
+    accTitle: iAP2 interception flow
+    accDescr: Incoming iAP2 bytes are read by the hook, framed, dispatched to registered modules and always forwarded unmodified to Cinemo, while the outgoing Identify is patched to add the RGD component.
+
     ip["iPhone iAP2 bytes"] --> hk["our read()/recv() hook"]
     hk --> parse["iap2_find_frame<br/>(sync, len, msgid@+4)"]
     parse -->|"registered msgid"| mod["module(s)<br/>RGD - cover-art - screen"]
@@ -26,12 +29,12 @@ flowchart LR
     mod --> bus["side effects -> bus-protocol"]
 ```
 
-## Context
+## 📋 Context
 
 > iPhone iAP2 -> **iap2-interception** - parse frames, patch Identify -> modules ->
-> [[bus-protocol]] - to Java. Cover-art tap: [[cover-art]].
+> [bus-protocol](bus-protocol.md) - to Java. Cover-art tap: [cover-art](cover-art.md).
 
-## Framework
+## ⚙️ Framework
 
 `main.c` is the module table and nothing else: it lists the shipping modules (route-guidance,
 cover-art) in initialisation order. Nothing auto-registers from an ELF constructor - the framework
@@ -41,23 +44,23 @@ session state, outgoing transport frames, the raw `NmeTransport::Recv` tap) is d
 `hook_module_def_t`, so `hook_framework.c` includes no module header. `hook_framework` keeps a
 priority-ordered registry and routes each parsed frame to the modules that asked for its `msgid`.
 The shared object exports only the five Cinemo interposers (build-enforced allowlist) - see
-[[integration-seam]].
+[integration-seam](integration-seam.md).
 
-## Frame parsing
+## 🔍 Frame parsing
 
 `iap2_find_frame` scans the transport buffer for the iAP2 frame sync, reads the frame length, the
 `msgid` (**BE16 at offset +4**) and the payload (from +6). Route-guidance frames are `0x5200-0x5204`;
 the RGD module validates the **whole** message before parsing it and hands a malformed one back to
-stock untouched (see [[rgd-tlv]]).
+stock untouched (see [rgd-tlv](../rgd/rgd-tlv.md)).
 
-## Identify patcher
+## 🔧 Identify patcher
 
 On the outgoing iAP2 **Identification** message the hook injects the extra component the stock Cinemo
 SDK never advertises (an EAGroup/route-guidance component) plus the `0x52xx` message IDs, so iOS
 registers the accessory as route-guidance-capable and starts sending `StartRouteGuidanceUpdates`.
 Without this patch iOS never emits any RGD traffic.
 
-## Checksum
+## ✅ Checksum
 
 The iAP2 link checksum is applied (NEG, hard-coded) with a one-shot sanity log on the first stock
 frame, so an injected/patched frame stays wire-valid.

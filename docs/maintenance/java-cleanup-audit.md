@@ -19,16 +19,16 @@ Migrated from `docs/reference/JAVA_PRODUCTION_CLEANUP_AUDIT.md` (original scope:
 against stock MU1316) and **re-verified against the current branch**. Each item below carries its
 **real current status**, not the audit's original status - several cleanups have since landed.
 
-## Context
+## 📋 Context
 
-> [[architecture]] - Java patch layer -> cluster HUD + route-info - KOMO gfx gate -> [[komo-widget-video]]
-> - route-info toggle publishes [[bap-fctids]] FctID 22
+> [architecture](../architecture.md) - Java patch layer -> cluster HUD + route-info - KOMO gfx gate -> [komo-widget-video](../re/firmware/komo-widget-video.md)
+> - route-info toggle publishes [bap-fctids](../rgd/bap-fctids.md) FctID 22
 
 **Bottom line:** all four cleanup groups are resolved on this branch except two dead-code leftovers:
 the `FrameworkRef` accessors, and `ClusterService.refreshInitializingScreenAfterCarPlay()`, which came
 back with the ported `ClusterService` but has no caller.
 
-## [x] route-info phase - live, keep (was: closed)
+## ✅ [x] route-info phase - live, keep (was: closed)
 
 (Line numbers in this section predate the RGI port; the call chain itself is unchanged.)
 
@@ -44,9 +44,9 @@ do not remove it. It is now driven by the steering-wheel roller press:
 `ScreenModule.InfoModeListener` is a real registered interface (`ScreenModule.java:210-229`), bound
 by `RouteGuidance` in start (`RouteGuidance.java:299,321`) and cleared on stop
 (`RouteGuidance.java:384`). `BAPBridge.infoPhase` / `buildTripSummary` / `lastDistanceToDestinationM`
-are therefore reachable and must stay. See [[steering-wheel]].
+are therefore reachable and must stay. See [steering-wheel](../input/steering-wheel.md).
 
-## [x] fake ClusterService pipeline API - removed (was: to remove)
+## ✅ [x] fake ClusterService pipeline API - removed (was: to remove)
 
 Confirmed gone: `activateCustomRendererPipeline()` and `deactivateCustomRendererPipeline()` no longer
 exist in `java_patch/`. (!) `refreshInitializingScreenAfterCarPlay()` is back in `ClusterService`
@@ -57,7 +57,7 @@ nothing calls it here - remove it or wire it deliberately. The
 `ClusterService` accessors (`getDSIResponseContainer()`, `triggerRefreshRGIValid()`, and the CombiBAP
 getter/setter) are retained as intended.
 
-## [x] KOMO reflection ladder (`forceGfxAvailable`) - resolved
+## ✅ [x] KOMO reflection ladder (`forceGfxAvailable`) - resolved
 
 The reflection ladder is gone (`CoverArtProviderMux` is now the only `java.lang.reflect` user).
 `BAPBridge.forceGfxAvailable` returns immediately unless `Util.isClusterMapMOST(fw)`; on a MOST cluster
@@ -66,9 +66,9 @@ it calls the public `KOMOService.updateDataRate(rate, 1)` then `updateGfxState(g
 `ClusterService.setKOMODataRate` when no `KOMOService` was acquired. On this FPK cluster it therefore
 does nothing: every data-rate write used to run `ClusterViewMode.setDataRate -> refreshMapVisibility`,
 which parked the stock kombi map in its hidden context after a route (frozen map, roller zoom
-swallowed) until the VC re-sent MapViewAndOrientation. See [[komo-widget-video]].
+swallowed) until the VC re-sent MapViewAndOrientation. See [komo-widget-video](../re/firmware/komo-widget-video.md).
 
-## (!) disabled diagnostics & dead members - PARTIALLY DONE
+## ⚠️ (!) disabled diagnostics & dead members - PARTIALLY DONE
 
 **Done (verified gone):**
 
@@ -90,7 +90,7 @@ swallowed) until the VC re-sent MapViewAndOrientation. See [[komo-widget-video]]
 (Note: `ScreenModule.isConnected()` is a **different, live** method - it pins the cluster while
 CarPlay owns it, called from `CombiMapController` and `ClusterService`. Keep it.)
 
-## Keep (unchanged - do not delete for size)
+## 📌 Keep (unchanged - do not delete for size)
 
 - The six stock replacement classes: their public/protected ABI is complete and stock code calls
   into them outside local reachability.
@@ -102,7 +102,7 @@ CarPlay owns it, called from `CombiMapController` and `ClusterService`. Keep it.
   `lastTimeRemainingSampleSeconds`, `currentRemainingSeconds()`, `currentArrivalSeconds()`) - they
   publish the real FctID 22 absolute ETA.
 
-## Remaining patch order
+## ✍️ Remaining patch order
 
 1. Remove the dead `FrameworkRef` accessors (+ unused imports) and decide on
    `refreshInitializingScreenAfterCarPlay()`.

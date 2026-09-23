@@ -17,11 +17,11 @@ Reproduced both directions: a phone on the iOS 27 beta started connecting; a pho
 reproduced the failure. The iOS version is causal. `carkitd` builds the CarPlay control advertising;
 the two versions differ in **how the display configuration behind the BonjourHost is built**.
 
-## Context
+## 📋 Context
 
-> [[connect]] - airplayd needs a network + advert -> **carkitd** builds the display config -> BonjourHost.
+> [connect](../../deploy/connect.md) - airplayd needs a network + advert -> **carkitd** builds the display config -> BonjourHost.
 
-## The delta (both versions, up to picking the vehicle, are identical)
+## 🔍 The delta (both versions, up to picking the vehicle, are identical)
 
 `fetchCarPlayControlAdvertisingForUSBWithReply:` dispatches to the main queue, calls `_isRestricted:`,
 then walks `messagingConnector.connectedVehicles` for one with `transportType==1`, `supportsUSBCarPlay`,
@@ -40,13 +40,13 @@ not `supportsCarPlayConnectionRequest`, then matches the stored vehicle via
 Proven: (1) `zoomFactor` (per car) became `zoomFactorByDisplayIndex` (per display); (2) the lookup key
 moved from vehicle UUID to **MFi cert serial + `clusterAssetIdentifier`**.
 
-## Why it points at this head unit
+## 🔍 Why it points at this head unit
 
 Every part of the delta is about **multiple displays and the cluster** - exactly where this HU is not
 a stock car. A single car-wide `zoomFactor` is the kind of mismatch iOS 27's per-display model removes.
 Causal role still open, but the direction is clear.
 
-## Corrections (do not rebuild these)
+## ⚠️ Corrections (do not rebuild these)
 
 - iOS <= 26 takes the zoom from the phone's own capabilities store (keyed by vehicle UUID), **not**
   from our advertised `widthPhysical`/`heightPhysical`. Our density never enters that path.
@@ -56,7 +56,7 @@ Causal role still open, but the direction is clear.
   It is **not** a repair path for a malformed accessory advert (its only failure exits are nil identifier
   -> error 9 and vehicle-not-in-store -> error 6).
 
-## One real bug found along the way
+## 🐛 One real bug found along the way
 
 The cluster's advertised physical size was simply wrong (203 dpi / ~7.6\" implied vs the real 12.3\" /
 125 dpi). Corrected to 292x110 mm. This is a **correctness fix, not a proven connect fix** - the

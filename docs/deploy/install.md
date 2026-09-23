@@ -9,7 +9,7 @@ sources:
   - code: deploy/smartphone_integrator/carplay_child.json
   - code: maneuver_render/main.c
 reconciles:
-  - README.md#deployment
+  - README.md#-deployment
 ---
 
 # Install, verify and uninstall
@@ -42,7 +42,7 @@ seven files plus two in-place config edits.
 | `dio_manager.json` | not staged | `/mnt/system/etc/eso/production/`, five route-guidance IDs added in place | - |
 
 Build the three compiled outputs first (`build_hook.sh`, `build_renderers.sh`, `build_java.sh`); see
-[README - Build](../../README.md#build). Everything else is copied unchanged.
+[README - Build](../../README.md#-build). Everything else is copied unchanged.
 
 ```mermaid
 flowchart TB
@@ -257,7 +257,7 @@ Route guidance needs **two** things; the install provides the second:
 
 1. **The hook's Identify patch** (automatic, at runtime). It adds the route-guidance component
    `0x001E` to the outgoing iAP2 Identify so iOS offers route guidance at all (see
-   [[iap2-interception]]). It does not touch any message-ID list.
+   [iap2-interception](../hook/iap2-interception.md)). It does not touch any message-ID list.
 2. **The message-ID registration** in `dio_manager.json`. The Cinemo iAP2 SDK inside `dio_manager`
    only passes listed messages; without the IDs iOS sends route guidance and the SDK drops it before
    the hook sees it, and iOS never sends lane guidance (`0x5204`) unless it is in the received list.
@@ -335,7 +335,7 @@ ls -l /mnt/app/root/hooks/ /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar
 Then connect the phone and start a route in Apple Maps: the maneuver panel must appear on the cluster
 over the stock map, with the turn arrow on the HUD. Logs: `/tmp/carplay_hook.log`,
 `/tmp/carplay_java.log`, `/tmp/maneuver_render.log`, `/tmp/carplay_wrapper.log` (see
-[README - Logging](../../README.md#logging)). If route guidance never appears, check the
+[README - Logging](../../README.md#-logging)). If route guidance never appears, check the
 `dio_manager.json` grep first: with the IDs missing the SDK drops the messages before the hook, so the
 hook logs nothing about them.
 
@@ -382,4 +382,4 @@ the next `dio_manager` generation; the jar only by a reboot.
 directories.
 
 Runtime ownership after the reboot (who starts `maneuver_render`, why it outlives `dio_manager`) is in
-[[supervisor-lifecycle]].
+[supervisor-lifecycle](supervisor-lifecycle.md).

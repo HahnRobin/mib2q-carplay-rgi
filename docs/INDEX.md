@@ -12,15 +12,15 @@ final verified fact. `reconciles:` frontmatter records which legacy docs were fo
 
 > **All topics seeded [x]** - 33 notes. `(!)` items inside notes are real product TODOs, not doc gaps.
 
-## [architecture](architecture.md) - process topology, threading, boot / init - build, test & deploy  [x]
+## 🗂️ [architecture](architecture.md) - process topology, threading, boot / init - build, test & deploy  [x]
 
-## Hook - `libcarplay_hook.so`  [x]
+## 🪝 Hook - `libcarplay_hook.so`  [x]
 - [iap2-interception](hook/iap2-interception.md) - recv/read hooks, FF-5A framing, Identify patch
 - [bus-protocol](hook/bus-protocol.md) - localhost TCP :19810, sticky event/command frames, fd/generation lifecycle, signal policy
 - [cover-art](hook/cover-art.md) - chunked JPEG reassembly, async decode -> VC picture
 - [integration-seam](hook/integration-seam.md) - what LD_PRELOAD interposes vs stays stock (5-symbol export allowlist); NME injection ABI; hardening
 
-## Route guidance - RGD -> BAP  [x]
+## 🧭 Route guidance - RGD -> BAP  [x]
 - [rgd-tlv](rgd/rgd-tlv.md) - iAP2 RouteGuidanceUpdate TLV map (0x5200-0x5204), whole-message validation, route_generation
 - [rgd-activation](rgd/rgd-activation.md) - route state machine, `visible_in_app`, BAP start -> ctx 80, route-end hold, which nav apps send RGI
 - [maneuver-mapping](rgd/maneuver-mapping.md) - full EManeuverType 0-53 -> BAP descriptor
@@ -30,34 +30,34 @@ final verified fact. `reconciles:` frontmatter records which legacy docs were fo
 - [vc-route-text](rgd/vc-route-text.md) - FctID 19 route text, ETA toggle, grapheme-safe scrolling, vc-text.bin
 - [navsd-catalogue](rgd/navsd-catalogue.md) - complete NavSD FctID catalogue (1-56)
 
-## Cluster  [x]
+## 🖥️ Cluster  [x]
 - [display-contexts](cluster/display-contexts.md) - dc[74]/dc[80], displayables 98/33/101/102, switch worker
 - [compositing](cluster/compositing.md) - maneuver overlay over native map, HU->MOST->VC H.264
 - [maneuver-renderer](cluster/maneuver-renderer.md) - :19800 protocol, C++ scene engine, visible area, watchdog
 - [kdk-geometry](cluster/kdk-geometry.md) - KDK backings 101/102, VC Fct44/Fct54-driven visibility & stage, HU geometry table
 
-## Input  [x]
+## 🎛️ Input  [x]
 - [touchpad-dpad](input/touchpad-dpad.md) - MMI touchpad -> DPAD bridge (TouchpadController)
 - [steering-wheel](input/steering-wheel.md) - MFW roller: rotation = stock zoom, press = route-info toggle
 
-## HMI - head-unit screen  [x]
+## 📱 HMI - head-unit screen  [x]
 - [pdc-small-stage](hmi/pdc-small-stage.md) - CarPlay stays beside the side parking (OPS) popup: small stage, message 108, APS drawer, status line
 
-## Deploy  [x]
+## 🚀 Deploy  [x]
 - [install](deploy/install.md) - release contents, M.I.B. installer, manual SSH install, verify, uninstall
 - [supervisor-lifecycle](deploy/supervisor-lifecycle.md) - smartphone_integrator, renderer ownership, USB pre-SETUP recovery
 - [connect](deploy/connect.md) - USB / NCM / Bonjour connect flow + failure root cause
 - [session-lifecycle](deploy/session-lifecycle.md) - session audit: watchdog-hang, USB pre-RTSP class, resilience risks R1-R4
 
-## Maintenance  [x]
+## 🔧 Maintenance  [x]
 - [java-cleanup-audit](maintenance/java-cleanup-audit.md) - Java patch cleanup status; remaining dead accessors
 
-## Reverse engineering - iOS  [x]
+## 🔍 Reverse engineering - iOS  [x]
 - [accessoryd-rgd](re/ios/accessoryd-rgd.md) - ACCNav RGUpdate enum (accessoryd 23G71)
 - [carkitd-bonjour](re/ios/carkitd-bonjour.md) - iOS 26 vs 27 connect divergence
 - [maps-maneuvers](re/ios/maps-maneuvers.md) - Maps accNav enum + signed exit angle
 
-## Reverse engineering - firmware (MIB2Q MU1316)  [x]
+## 🔍 Reverse engineering - firmware (MIB2Q MU1316)  [x]
 - [display-manager](re/firmware/display-manager.md) - DisplayManager + dmdt, window binding
 - [komo-widget-video](re/firmware/komo-widget-video.md) - KOMO widget video + gfxAvailable gate
 - [dsi-carkombi](re/firmware/dsi-carkombi.md) - DSICarKombi + DSIKombiSync2
@@ -66,7 +66,7 @@ final verified fact. `reconciles:` frontmatter records which legacy docs were fo
 
 ---
 
-## Verification
+## ✅ Verification
 
 Every note carries a `status` recording how its facts were checked.
 

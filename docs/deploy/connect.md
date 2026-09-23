@@ -17,10 +17,12 @@ reconciles:
 Wired CarPlay does not start from `carkitd`; it starts from **`airplayd`**, gated on mDNS discovery of
 `CarPlay._airplay._tcp.local` on the **NCM link**. `carkitd` only does connection-time bookkeeping.
 
-## Flow
+## 🧭 Flow
 
 ```mermaid
 flowchart LR
+    accTitle: USB to CarPlay connect flow
+    accDescr: USB enumeration of the iPhone brings up iAP2, then the NCM interface carplay0, IPv6 addressing and the mdnsd Bonjour advert. airplayd then starts Bonjour for USB and reaches /info and RTSP.
     usb["USB enumerate<br/>(Apple device)"] --> iap2["iAP2 link<br/>accessoryd: Connected"]
     iap2 --> ncm["NCM function up<br/>startncm.sh -> carplay0"]
     ncm --> addr["IPv6 addressing"]
@@ -30,7 +32,7 @@ flowchart LR
 
 Auth is ~330 ms; the real latency is HU-side NCM addressing.
 
-## The failure - "No Network Interface"
+## 🐛 The failure - "No Network Interface"
 
 From the failing-evening sysdiagnose, `airplayd` names the reason:
 
@@ -49,7 +51,7 @@ was then Bonjour resolution - `StartBonjourForUSB` (59.631) -> `[USB] Bonjour de
 (23:37:00.030, `CarPlay._airplay._tcp.local.`) -> `Created APEndpointCarPlay [0x441F]` (23:37:00.034),
 and the session came up.
 
-## Why it is our defect (the race)
+## 🔍 Why it is our defect (the race)
 
 `smartphone_integrator` owns the OTG lifecycle and runs `stopncm.sh` as its per-child cleanup by
 design - a dying `dio` generation is normal. Each generation `startncm.sh`/`stopncm.sh` **destroys and
@@ -59,6 +61,8 @@ A head-unit reboot clears the accumulated broken state (the first attempt on a c
 
 ```mermaid
 sequenceDiagram
+    accTitle: NCM teardown race with mdnsd
+    accDescr: smartphone_integrator spawns dio and startncm.sh, then kills dio at about 15 s, destroying carplay0. If mdnsd has not re-registered the CarPlay advert in that window, the iPhone reports No Network Interface.
     participant SI as smartphone_integrator
     participant NCM as start/stopncm.sh
     participant MD as mdnsd (carplay0)
@@ -74,7 +78,7 @@ sequenceDiagram
     Note over SI,iOS: self-feeding - more churn, less chance to win
 ```
 
-## MHI2Q specifics
+## ⚙️ MHI2Q specifics
 
 - device-controller DLL `devu-usbrndis-msm8960-ci.so` (MSM8960), loaded via
   `io-usb-dcd -d usbrndis-msm8960-ci`; no `usblauncher-Apple.so`.
@@ -82,7 +86,7 @@ sequenceDiagram
 - `Device_Stack.cmd = /etc/scripts/start_usb_device_stack.sh`, `connect_poll = 100`,
   `descriptors = {usbdesc_carlife, usbdesc_carplay, rndis}`.
 
-## (!) Open
+## ⚠️ (!) Open
 
 - root cause of the missing re-registration not fully proven; iOS 26-vs-27 behaviour differs - see
-  [[carkitd-bonjour]]. The guarded USB pre-SETUP reset is handled by [[supervisor-lifecycle]].
+  [carkitd-bonjour](../re/ios/carkitd-bonjour.md). The guarded USB pre-SETUP reset is handled by [supervisor-lifecycle](supervisor-lifecycle.md).

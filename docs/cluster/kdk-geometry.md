@@ -17,13 +17,13 @@ reconciles:
 
 Where the maneuver overlay (98) and its KDK backing sit on the cluster, and who decides.
 
-## Context
+## 📋 Context
 
-> [[display-contexts]] - ctx 80 planes -> **kdk-geometry** - position/crop 98 + 101/102.
+> [display-contexts](display-contexts.md) - ctx 80 planes -> **kdk-geometry** - position/crop 98 + 101/102.
 > Applied by `ClusterLayerController.reapply()` on every stock KDK model update, VC FctID 44/54 input
 > and CarPlay context change.
 
-## The VC obeys; the HU dictates
+## 🔍 The VC obeys; the HU dictates
 
 > `status: verified-decompile` - decompiled against AU491 `gtf2` (ELF ARM, image base 0x100000); the
 > `FUN_*` addresses below are from this build.
@@ -40,7 +40,7 @@ design-dependent. The only hard-coded hole rectangles in this area are Night Vis
 **not KDK**. So the exact KDK rectangle comes over from the HU via
 `IDisplayManagerKombiControl.setCropping/setPosition`.
 
-## HU-side authoritative table (MU1316)
+## 📊 HU-side authoritative table (MU1316)
 
 `Layout.getIntegerConstant(id)`, chain `LayoutMIB2HighB9Sport -> LayoutMIB2HighB9 -> LayoutMIB2HighQ7`.
 Classic overrides **only** 58/59/60/61; everything else falls through to Q7.
@@ -54,7 +54,7 @@ Classic overrides **only** 58/59/60/61; everything else falls through to Q7.
 | 108 / 109 | map origin (displayables 33, 58) | 0, 26 | 0, 26 |
 | 80 / 81 | small-stage map offset | 0, 0 (Q7) | -476, 0 |
 
-## Stages & visibility (VC-driven)
+## 🔄 Stages & visibility (VC-driven)
 
 - **Backing 101** = sport/in-tube 328x180 stage; **backing 102** = popup 210x153 stage.
 - **Stage** - while CarPlay owns the cluster it follows **VC FctID 54** (`setMapPresentation(
@@ -71,12 +71,12 @@ Classic overrides **only** 58/59/60/61; everything else falls through to Q7.
   the other backing is always 0. Outside CarPlay the cached stock values are restored on 101/102 and 98
   is 0, so Audi navigation's KDK never stays transparent after a disconnect.
 - Plane 98 gets the stage's crop (`setCropping`, src = crop, dst = anchor), the backing gets the anchor
-  (`setPosition`). `maneuverViewport()` returns the same crop to the renderer ([[maneuver-renderer]]).
+  (`setPosition`). `maneuverViewport()` returns the same crop to the renderer ([maneuver-renderer](maneuver-renderer.md)).
 - Geometry comes from the terminal's live stock `Layout` (`updateLayout`), cached as primitives; a
   fallback Sport table is used only before the first stock model update. Every distinct decision is
   logged once (`ClusterLayers apply ...`).
 
-## (!) Do NOT apply the small-stage offset (80/81) to the KDK panel
+## ⚠️ Do NOT apply the small-stage offset (80/81) to the KDK panel
 
 Stock adds the `-476,0` Sport singlescreen offset to the **map planes 33/58 only**. The KDK panel and
 its backing have no view-size dependency (`positionKDKBackgrounds` / `handleKdkDualTerminal` read no

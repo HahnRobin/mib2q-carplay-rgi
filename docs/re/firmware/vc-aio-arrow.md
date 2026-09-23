@@ -12,17 +12,19 @@ reconciles:
 # VC AIO-arrow path - why InfoStates=6 is blocked
 
 **The VC-native "AIO arrow" maneuver icons cannot be driven from CarPlay.** This is *the* reason
-maneuvers ship over BAP `ManeuverDescriptor` (FctID 23) instead - see [[bap-fctids]] / [[maneuver-mapping]].
+maneuvers ship over BAP `ManeuverDescriptor` (FctID 23) instead - see [bap-fctids](../../rgd/bap-fctids.md) / [maneuver-mapping](../../rgd/maneuver-mapping.md).
 
-## Context
+## 📋 Context
 
 > Two independent VC data paths: **BAP** (FctID 23 -> HUD, works) vs **MOST Class 46 -> KSS -> EB GUIDE**
 > (AIO arrows, blocked). This note is why the second path is a dead end.
 
-## Two paths on the VC
+## 🧭 Two paths on the VC
 
 ```mermaid
 flowchart LR
+    accTitle: VC BAP versus Class 46 paths
+    accDescr: The BAP path from LSG 50 to EB GUIDE HUD works. The MOST Class 46 path populates AIO_Arrow items, but its InfoStates validator rejects 6, so the view never renders.
     subgraph bap["BAP path - WORKS"]
         b1["BAP LSG 50 -> MOST"] --> b2["gssipc-kbd -> dp items"] --> b3["EB GUIDE HUD/text<br/>(FctID 23 maneuver icons)"]
     end
@@ -38,7 +40,7 @@ flowchart LR
 BAP (Class 50) and Class 46 are separate MOST message types that never overlap for nav data:
 `gssipc-kbd` handles BAP; KSS handles Class 46.
 
-## Root cause - the InfoStates validator rejects 6
+## 🔍 Root cause - the InfoStates validator rejects 6
 
 `SV_NavFPK_Compass_MobileDevice` (the view that renders AIO arrows) requires **InfoStates = 6
 (MobileDevice)**. InfoStates arrives as MOST `0x515` -> `sub_108EC68` -> validator `sub_108F42C`:
@@ -60,14 +62,14 @@ never drawn - even though the arrow bytes (`0x2289` -> `off_108EF40[0..4]`) *are
 | **6** | **0110** | **FAIL `(v&5)==4`** |
 | 8,9 | 1000/1001 | FAIL `(v&0xA)==8` |
 
-## Why it cannot be fixed
+## 🚫 Why it cannot be fixed
 
 The VC runs KSS AUTOSAR (`KSSApplication.bin`) in a **secure** environment. UDS `WriteMemoryByAddress`
 patches are **RAM-only** (lost every reboot), there is no persistent flash write from a diagnostic
 session, and a persistent fix would need ODIS attached at every boot. So the MobileDevice/AIO-arrow
 approach is **not viable** - maneuvers use the BAP HUD path instead.
 
-## Anchors (KSS AU491 FPK)
+## 📚 Anchors (KSS AU491 FPK)
 
 `sub_108F42C` InfoStates validator - `sub_108EB66` arrow handler (0x2289, 5 bytes, per-arrow enable
 bitmask at `off_108EBCC[108]`) - `sub_108EC68` InfoStates handler (0x515) - shared signal group 29 at

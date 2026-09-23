@@ -5,7 +5,7 @@ CarPlay patch set for Audi MHI2Q infotainment.
 
 **Disclaimer:** Use at your own risk. These patches modify firmware binaries and system configurations on your infotainment unit. Always back up all original files before making any changes. The authors are not responsible for any damage, bricked devices, or warranty issues resulting from use of these patches.
 
-## Gallery
+## 🖼️ Gallery
 
 <p align="center">
   <img src="assets/gallery/maneuver_demo.gif" width="90%" /><br />
@@ -38,19 +38,19 @@ CarPlay patch set for Audi MHI2Q infotainment.
   <img src="assets/gallery/IMG_0599.jpeg" width="30%" />
 </p>
 
-## Contents
+## 📍 Contents
 
-- [Gallery](#gallery)
-- [Features](#features)
-- [Repository layout](#repository-layout)
-- [Build](#build)
-- [Deployment](#deployment)
-- [Logging](#logging)
-- [Documentation](#documentation)
-- [Known issues & TODO](#known-issues--todo)
-- [References](#references)
+- [Gallery](#-gallery)
+- [Features](#-features)
+- [Repository layout](#-repository-layout)
+- [Build](#-build)
+- [Deployment](#-deployment)
+- [Logging](#-logging)
+- [Documentation](#-documentation)
+- [Known issues & TODO](#-known-issues--todo)
+- [References](#-references)
 
-## Features
+## ✨ Features
 
 There is nothing to switch on: plug in the iPhone and CarPlay starts as usual; the cluster
 features below follow it automatically.
@@ -60,7 +60,7 @@ features below follow it automatically.
   cluster). The arrow fills as the turn approaches and blinks just before it, lane arrows appear under
   it, and the cluster also shows distance to the turn, arrival time and remaining distance. Needs an
   app that sends CarPlay route guidance: Apple Maps and Google Maps do, Waze does not
-  ([details](docs/rgd/rgd-activation.md#which-navigation-apps-send-route-guidance)).
+  ([details](docs/rgd/rgd-activation.md#-which-navigation-apps-send-route-guidance)).
 - **Route text in the Virtual Cockpit.** A text line names the exit sign or the next road (the
   current road when there is nothing else); long names scroll. Press **OK** (the left steering-wheel
   roller) to switch it to arrival time and time left, and press again to go back; it returns by itself
@@ -72,7 +72,7 @@ features below follow it automatically.
   CarPlay stays on screen instead of being replaced ([details](docs/hmi/pdc-small-stage.md)).
 - **MMI touchpad → DPAD bridging** so finger drags navigate CarPlay menus.
 
-## Repository layout
+## 🗂️ Repository layout
 
 | Path | Purpose |
 | --- | --- |
@@ -86,13 +86,13 @@ features below follow it automatically.
 | `scripts/` | Docker build entry points (Java / hook / renderer) and host test runners |
 | `tests/` | Host tests (C, Java, Python) for the hook, Java bridge and renderer |
 | `toolchain/qnx65-abi/` | QNX Screen ABI headers used only for cross-compilation |
-| `docs/` | Obsidian knowledge base - validated RE + implementation notes (open [`docs/INDEX.md`](docs/INDEX.md)) |
+| `docs/` | Markdown knowledge base (also opens in Obsidian) - validated RE + implementation notes (open [`docs/INDEX.md`](docs/INDEX.md)) |
 | `assets/` | Screenshots and visual reference material |
 | `build/` | Canonical deployable artifacts |
 
 Raw unit logs and generated class trees are intentionally kept outside Git.
 
-## Build
+## 🔧 Build
 
 Native code needs the QNX 6.5 ARMv7 cross-toolchain image from
 [luka-dev/qnx65-armv7-toolchain](https://github.com/luka-dev/qnx65-armv7-toolchain). Build it once:
@@ -141,7 +141,7 @@ The Java suites need the stock MU1316 jar and JDK under `../../Tools/jxe2jar`. F
 threading, boot and the complete test list live in the knowledge base - see
 [`docs/architecture.md`](docs/architecture.md).
 
-## Deployment
+## 🚀 Deployment
 
 **Compatibility.** The patch is not limited to US, EU or CN units, nor to one MU train: it is
 meant for any MHI2Q MU firmware (developed on MU1316). What matters is:
@@ -183,12 +183,12 @@ The step-by-step guide for both - the SD layout, installer output and warnings, 
 **Reboot.** Disconnect CarPlay, run `sync` and wait a few seconds, then reboot normally: a forced
 reboot (the MMI button combo) right after copying can leave the files truncated or missing. The jar is
 on j9's boot classpath, so it only loads after a full restart. On boot `smartphone_integrator` launches
-everything; check `/tmp/carplay_hook.log` and `/tmp/carplay_java.log` (see [Logging](#logging)).
+everything; check `/tmp/carplay_hook.log` and `/tmp/carplay_java.log` (see [Logging](#-logging)).
 
 Exact ownership rules, the `LD_PRELOAD`/env constraints and the MU1316 QNX-compat audit are in
 [`deploy/smartphone_integrator/README.md`](deploy/smartphone_integrator/README.md).
 
-## Logging
+## 📝 Logging
 
 Both sides write to `/tmp` on the unit:
 
@@ -205,17 +205,17 @@ touch /mnt/app/carplay_verbose        # or /tmp/carplay_verbose
 ```
 
 Remove the marker to return to the quiet default. Logs reset on reboot, so pull them before restarting.
-For raw route-guidance packet dumps, rebuild the hook with `LOG_RGD_PACKET_RAW=1` (see [Build](#build)).
+For raw route-guidance packet dumps, rebuild the hook with `LOG_RGD_PACKET_RAW=1` (see [Build](#-build)).
 
-## Documentation
+## 📚 Documentation
 
-`docs/` is an Obsidian knowledge base - one note per topic, each fact validated against code /
+`docs/` is a Markdown knowledge base (also opens in Obsidian) - one note per topic, each fact validated against code /
 firmware / iOS binary. Start at [`docs/INDEX.md`](docs/INDEX.md): architecture & threading, the hook
 and bus, route guidance (TLV → BAP → cluster, lanes, route text), cluster compositing and the maneuver
 renderer, input, deploy/connect, build & host tests, the reverse-engineering references, and a
 per-note verification status.
 
-## Known issues & TODO
+## 🐛 Known issues & TODO
 
 Help wanted - open items on the current branch:
 
@@ -236,7 +236,7 @@ moment plus a note on what was expected helps a lot. The hook logs unrecognised 
 as `[HOOK] Unknown 0x52xx msgid=0xNNNN dir=IN len=N` followed by a hex dump - that line is the best
 starting point when iOS sends a maneuver type we don't handle yet.
 
-## References
+## 🔗 References
 
 Thanks for the prior work and knowledge that helped figure this out.
 
@@ -254,7 +254,7 @@ Thanks for the prior work and knowledge that helped figure this out.
 
 <br>
 
-### 🚀 Coming soon. Maybe. Someday. No promises.
+### Coming soon. Maybe. Someday. No promises.
 
 It was just the warm-up, next:
 
@@ -271,3 +271,5 @@ It was just the warm-up, next:
 Stay tuned. 👀
 
 </details>
+
+---

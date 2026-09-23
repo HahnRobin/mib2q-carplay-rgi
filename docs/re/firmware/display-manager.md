@@ -12,9 +12,9 @@ reconciles:
 # DisplayManager & dmdt (MU1316)
 
 The service that owns cluster/main-display **contexts** and binds each **displayable** to a screen
-window. Implementation backing [[display-contexts]].
+window. Implementation backing [display-contexts](../../cluster/display-contexts.md).
 
-## Contexts & window binding
+## 🔍 Contexts & window binding
 
 A *context* is an ordered list of displayable ids per terminal; the compositor draws them front-to-
 back. Each terminal window is created and named in `CTerminal`:
@@ -26,7 +26,7 @@ so the window carries `SCREEN_PROPERTY_ID_STRING="<id>"`. On the DM side the
 `CSurfaceSource`, and binds it into the id->`CSurfaceSource` map (`m_surfaceSources`, the red-black
 tree at `DisplayManager+0x68`), then `attachSource`s it to the displayable. A displayable with no
 stock owner (e.g. **98**) has an empty slot before we start, so binding it is not a race - see
-[[compositing]].
+[compositing](../../cluster/compositing.md).
 
 `CASIMostEncoder::setActiveDisplayable(terminal, id)` wires the MOST encoder to read that displayable
 (it records the mapping, then forwards to the video-over-MOST proxy); the stock context switch runs
@@ -34,6 +34,8 @@ it for the leading displayable of the context.
 
 ```mermaid
 sequenceDiagram
+    accTitle: Displayable 98 window binding
+    accDescr: maneuver_render creates a CTerminal window with id string 98, DisplayManager registers it as a surface source, and on a context switch the MOST encoder is set to read displayable 98.
     participant R as maneuver_render
     participant T as CTerminal
     participant DM as DisplayManager (CScreenHandler)
@@ -48,17 +50,17 @@ sequenceDiagram
     E->>E: MOST encoder reads displayable 98
 ```
 
-## dmdt
+## 🔧 dmdt
 
 `dmdt` is a thin CLI client for the Display Manager debug IPC (`asi.displaymanager.DebugTool` /
 `DebugToolReply`), via a `DMRCClient` comm agent on domain `local`. It sends one request, waits for
 the async reply, prints it, sleeps 50 ms (`nanosleep`, `tv_nsec=50000000`), then `_Exit(0)` - it
 holds **no local state**. `main` @ `0x106050` starts the agent and builds the proxy
 (`comm::Proxy` @ `0x103278`); useful for inspecting contexts (`dmdt gs`, `dmdt gd`) but the patch
-drives context switching from Java, not dmdt (the renderer runs no dmdt - see [[display-contexts]]).
+drives context switching from Java, not dmdt (the renderer runs no dmdt - see [display-contexts](../../cluster/display-contexts.md)).
 
-## Why we don't use libdisplayinit
+## ⚠️ Why we don't use libdisplayinit
 
 `cluster_surface` creates the managed window with raw `screen_create/manage_window` instead of
 `libdisplayinit`, so `maneuver_render` can create displayable 98 standalone (no HMI screen
-connection inherited) - see [[compositing]].
+connection inherited) - see [compositing](../../cluster/compositing.md).

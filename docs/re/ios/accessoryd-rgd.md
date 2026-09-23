@@ -10,15 +10,15 @@ sources:
 # accessoryd - ACCNav route-guidance update enum
 
 The phone-side composer that serializes route guidance into the iAP2 `RouteGuidanceUpdate` (0x5201).
-This is the authoritative source for the TLV meanings our hook parses ([[rgd-tlv]]).
+This is the authoritative source for the TLV meanings our hook parses ([rgd-tlv](../../rgd/rgd-tlv.md)).
 
-## The class
+## 🔍 The class
 
 `ACCNavigationRouteGuidanceUpdateInfo` (in `accessoryd`) holds an `_infoDict` keyed by an integer
 type, serialized to iAP2. `+[... keyForType:]` maps each type to a named key `ACCNav_RGUpdate_*`. The
 value is supplied by the CarPlay nav app (Maps or 3rd-party) via `platform_navigation_*`.
 
-## type -> field (verified from `keyForType:`)
+## 📋 type -> field (verified from `keyForType:`)
 
 | type | key |
 |---:|---|
@@ -45,12 +45,12 @@ value is supplied by the CarPlay nav app (Maps or 3rd-party) via `platform_navig
 | 0x17 | ChargingStationInfoList |
 | 0x18-0x1A | Arrival / Departure / FinalWaypoint BatteryLevel |
 
-## The one that matters most
+## 📌 The one that matters most
 
 **0x0F = `RouteGuidanceBeingShownInApp`** - whether the nav app's guidance UI is *on screen*, a
 separate field from RouteGuidanceState (0x01) and ManeuverCount (0x0E). It is **not** a route-active
 flag; iOS sends it `0` for third-party maps / backgrounded nav even mid-route. This is the firmware
-basis for the [[rgd-activation]] fix.
+basis for the [rgd-activation](../../rgd/rgd-activation.md) fix.
 
 `+[ACCNavigationServer accessoryNavigationStartRouteGuidance:...]` handles start/stop; the value flows
 from the platform navigation plugin (app visibility helpers: `isAppVisibleInCurrentMode:`,

@@ -15,7 +15,7 @@ reconciles:
 > stock crossed-out telephone tab while CarPlay owns telephony, and why it did not work. If revisited,
 > start from "the real lever" below.
 
-## Goal & rule
+## 🎯 Goal & rule
 
 While CarPlay owns the phone, hide the stock crossed-out PHONE2 telephone tab in the cluster; restore
 it only once MMI HFP telephony is actually available again.
@@ -24,7 +24,7 @@ it only once MMI HFP telephony is actually available again.
 tabVisible = (mobileConnectionType == HANDS_FREE_PROFILE /*3*/) && !carPlayActive   // fail-open
 ```
 
-## What was built (and why it failed)
+## ❌ What was built (and why it failed)
 
 A `PhoneTabGate` combined two inputs and drove a PHONE2 BAP lever:
 
@@ -44,12 +44,14 @@ errors). **v2 caused two telephone icons at once** - forcing LSG 41 `NOT_READY` 
 back between its separate **Telephone** and **Telephone2** domains instead of hiding the shared slot,
 so the lever was **rejected** and the gate disabled.
 
-## The real lever (VC side)
+## 🔍 The real lever (VC side)
 
 The visual target is exact - force the VC's cached **`phoneAvailable = 0`**:
 
 ```mermaid
 flowchart LR
+    accTitle: PHONE2 tab icon gating chain
+    accDescr: The PHONE2 op-state handler sets phoneAvailable through App::setPhoneAvailable, and getTabBarIconIndex maps it to a hidden tab (icon 0) or a crossed handset (icon 6).
     h["PHONE2 op-state handler<br/>@0x17F1B0"] -->|"separate cached<br/>receiver-availability byte"| sp["App::setPhoneAvailable<br/>@0x18836C"]
     sp --> pa["phoneAvailable (App+960)"]
     pa --> idx["App::getTabBarIconIndex @0x183378"]
@@ -62,7 +64,7 @@ handler at `0x17F1B0` - it is **not** derived directly from `PhoneModuleState_St
 operation-state value. So gating `AppConnectorPhone2.updatePhoneModuleState()` (an earlier proposal)
 would not work either, and is unsupported by the binary.
 
-## If revisited
+## 💡 If revisited
 
 Find the true publisher of `BAP_Telephone2_Available` / the VC receiver-availability byte and drive
 **that** to 0 - changing the CarPlay/HFP source logic again cannot fix the rejected HMI-state lever.

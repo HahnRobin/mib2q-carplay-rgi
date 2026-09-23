@@ -13,18 +13,18 @@ sources:
 
 The link that carries parsed iAP2 state from the C hook to the Java HMI patch.
 
-## Context
+## 📋 Context
 
-> [[iap2-interception]] -> module emits event -> **bus-protocol** - TCP :19810 -> Java module
-> ([[rgd-activation]], [[cover-art]]).
+> [iap2-interception](iap2-interception.md) -> module emits event -> **bus-protocol** - TCP :19810 -> Java module
+> ([rgd-activation](../rgd/rgd-activation.md), [cover-art](cover-art.md)).
 
-## Topology
+## 🌐 Topology
 
 TCP `127.0.0.1:19810`. **Java is the long-lived server** (alive from HMI boot); the **hook is the
 client**, (re)connecting once per CarPlay session. Idempotent reconnect on either side's restart.
 No application heartbeat on this leg - Java relies on TCP FIN/RST + `setKeepAlive(true)`.
 
-## Wire frame (16-byte header, big-endian)
+## 📊 Wire frame (16-byte header, big-endian)
 
 | off | size | field |
 |---:|---:|---|
@@ -44,19 +44,19 @@ No application heartbeat on this leg - Java relies on TCP FIN/RST + `setKeepAliv
 - Types are a direct-indexed table below `MAX_TYPES = 0x0120`, identical in `bus.c` and
   `CarplayBus.java` (checked by `scripts/check_local_protocols.py`).
 
-## Direction
+## 🧭 Direction
 
 - **EVT_*** hook->Java: `EVT_RGD_UPDATE` (0x0020), `EVT_COVERART` (0x0010), `EVT_HELLO`, sync markers.
 - **CMD_*** Java->hook: `CMD_SYNC_REQ` (0x0100) requests a sticky snapshot. The `CMD_ALT_*` (0x0110-0x0116) defines in `bus_protocol.h` are altScreen leftovers with no
   handler in this hook.
 
-## Threads (hook side)
+## ⚙️ Threads (hook side)
 
 `connector` (connect + retry, HELLO + snapshot, then reads until the peer goes away) - `writer`
 (drains the outbound queue) - a 1 Hz `timer` driving `rgd_periodic_tick` (deferred `route_state=0`
-flush - see [[rgd-activation]]); the timer sends no application heartbeat.
+flush - see [rgd-activation](../rgd/rgd-activation.md)); the timer sends no application heartbeat.
 
-## Connection lifecycle (fd + generation)
+## 🔄 Connection lifecycle (fd + generation)
 
 Every new connection bumps a **generation**. A queued frame is written only if the socket's `(fd,
 generation)` is still current, checked under the same locks that serialize frames and socket
@@ -66,7 +66,7 @@ partial frame; only the **connector** calls `close()`, after its last read, so a
 freed under a blocked `recv`. Shutdown first wakes blocked senders (`shutdown`), then lets the connector
 close. Fork children never tear down the parent's bus (owner PID).
 
-## Signal policy
+## ⚙️ Signal policy
 
 QNX io-pkt rejects `MSG_NOSIGNAL` (`ENOSYS`), so every hook socket write uses `flags = 0` and the bus
 ignores `SIGPIPE` while it is active. `bus_init` installs this through `signal_guard`: `SIGPIPE` ->

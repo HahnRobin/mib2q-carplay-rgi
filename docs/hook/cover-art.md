@@ -15,24 +15,27 @@ reconciles:
 Stock MHI2Q CarPlay forwards title/artist/album to the VC but never pushes cover art, so the VC shows
 a blank album icon. This bridge fills it in.
 
-## Context
+## 📋 Context
 
 > Cinemo `NmeTransport::Recv` -> **cover-art** - reassemble + decode -> tmpfs PNG + `EVT_COVERART` ->
-> [[bus-protocol]] -> Java `CoverArt` -> `AppConnectorTerminalMode` picture mgr -> VC.
+> [bus-protocol](bus-protocol.md) -> Java `CoverArt` -> `AppConnectorTerminalMode` picture mgr -> VC.
 
-## Reassembly (on the hook thread)
+## ⚙️ Reassembly (on the hook thread)
 
 The cover-art module taps the Cinemo transport at **`NmeTransport::Recv`** (via the framework's
 transport-recv sink, not a global `recv` scan), and reassembles the chunked JPEG for the NowPlaying
 artwork from `SOI (FF D8) ... EOI`. The hook thread only appends + scans, so iAP2 traffic is never
 stalled.
 
-## Async decode worker
+## 🔄 Async decode worker
 
 The complete JPEG is handed to a **dedicated worker thread** (single-slot pending queue, latest-wins):
 
 ```mermaid
 flowchart LR
+    accTitle: Cover art decode worker
+    accDescr: Reassembled JPEGs go through a one-slot queue, duplicates are skipped by CRC32, and new images are decoded, resized to a PNG, swapped in atomically and announced with EVT_COVERART.
+
     recv["recv tap: reassemble JPEG"] --> q["1-slot queue<br/>(latest wins)"]
     q --> crc{"CRC32 == last?"}
     crc -- "yes" --> skip["skip (duplicate)"]
@@ -47,7 +50,7 @@ regenerated each session, lost on reboot (fine: the pipeline restarts every CarP
 `coverart.png` path is a symlink ping-ponged between `coverart_0.png` / `coverart_1.png` and swapped
 atomically via `rename()`.
 
-## Java side
+## ⚙️ Java side
 
 `CoverArt` subscribes to `EVT_COVERART`, dedups by CRC, and `AppConnectorTerminalMode` pushes the
 image to the BAP picture manager (`ResourceLocator` + `responseCoverArt()`), mirroring the native

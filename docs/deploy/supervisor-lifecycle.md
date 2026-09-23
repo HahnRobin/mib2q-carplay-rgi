@@ -20,6 +20,8 @@ reconciles:
 
 ```mermaid
 sequenceDiagram
+    accTitle: Supervisor and renderer lifecycle
+    accDescr: carplay_startup.sh forks a monitor that adopts or starts maneuver_render, then execs dio_manager with the hook. The renderer survives an ordinary dio exit and is only terminated on an explicit supervisor stop.
     participant SI as smartphone_integrator
     participant W as carplay_startup.sh
     participant M as monitor (fork)
@@ -38,21 +40,21 @@ sequenceDiagram
     W->>R: SIGTERM snapshot -> 4 s grace -> SIGKILL residual
 ```
 
-## Context
+## 📋 Context
 
 > `smartphone_integrator` (phone connect) -> **carplay_startup.sh** -> monitor + `exec dio_manager`
-> (with LD_PRELOAD) - adopts/starts `maneuver_render`. Why the NCM link churns: [[connect]].
+> (with LD_PRELOAD) - adopts/starts `maneuver_render`. Why the NCM link churns: [connect](connect.md).
 
-## Install
+## 🚀 Install
 
 What goes where on the unit, the M.I.B. installer, the manual SSH install and the uninstall are in
-[[install]]. The runtime-relevant facts: the three `carplay_*.sh`, `libcarplay_hook.so`,
+[install](install.md). The runtime-relevant facts: the three `carplay_*.sh`, `libcarplay_hook.so`,
 `maneuver_render` and `flag_atlas.rgba` live in `/mnt/app/root/hooks/`; `children.carplay` in
 `smartphone_integrator.json` is replaced by `carplay_child.json`; `dio_manager.json` must list the
 route-guidance IDs `0x5200`-`0x5204`; and the stock `/etc/scripts/carplay_cleanup.sh` is never
 overwritten (the custom cleanup calls it for Audi's mdnsd/PPS teardown).
 
-## Ownership rules
+## ⚙️ Ownership rules
 
 - `children.carplay.envs` carries **no** `LD_PRELOAD`; the wrapper adds it only to its final
   `dio_manager` process - so neither the shell nor the renderer loads the hook.
@@ -65,14 +67,14 @@ overwritten (the custom cleanup calls it for Audi's mdnsd/PPS teardown).
   existing EGL allocations instead of re-entering fragile Qualcomm `eglInitialize`. Only an explicit
   supervisor stop tears it down (SIGTERM snapshot -> 4 s grace `CP_KILL_GRACE` -> SIGKILL residual).
 
-## Adoption is by live PID
+## 🔍 Adoption is by live PID
 
 `maneuver_render` is a **client** of Java's route-scoped `:19800` listener, which Java deliberately
 closes when RGI is inactive. So a live recorded PID - not a socket probe - is the adoption health
 check; treating the closed listener as "unhealthy" would kill/recreate the EGL context every
 reconnect.
 
-## Guarded USB pre-SETUP recovery
+## 🔄 Guarded USB pre-SETUP recovery
 
 For the one failure class that happens before RTSP (both iAP2 interfaces matched but only one
 running - `drivers_matched::2` + `drivers_running::1` in PPS), the monitor **queues** a one-shot
@@ -81,7 +83,7 @@ latched until a successful control SETUP or reboot. It never resets the connecto
 starting/dying CarPlay process. (Widening the "stuck" test to `running < 2` was measured to make the
 state worse - do not.)
 
-## Cleanup is identity-less
+## ⚙️ Cleanup is identity-less
 
 `carplay_cleanup.sh` does not know which dio generation it runs for, so it must **not** create the
 global stop marker or stop renderers by shared PID files (either could damage a replacement

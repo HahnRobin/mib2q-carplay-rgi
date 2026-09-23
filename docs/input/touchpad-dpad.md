@@ -12,12 +12,12 @@ sources:
 Stock forwards the rotary, knob press, back and softkeys to CarPlay natively. The **MMI touchpad is
 the only input device stock leaves unbridged** - this patch adds the missing leg.
 
-## Context
+## 📋 Context
 
 > touchpad `updateTouchEvents` -> `TerminalModeDSIKeyEventsController` (class-replaced) ->
 > **TouchpadController** -> stock DSI `postDpad` -> CarPlay session.
 
-## Model
+## 🔍 Model
 
 `TouchpadController` (formerly `CursorController` - it once drove an on-screen cursor, abandoned because the H.264
 encoder ghosted the overlay through motion compensation). A single-finger drag accumulates signed
@@ -32,7 +32,7 @@ emits a `KEY_DPAD_*` press+release pair and subtracts the threshold from that ac
 - Entering single-finger anchors without emitting and resets the accumulators so prior drift doesn't
   leak in.
 
-## Wiring
+## ⚙️ Wiring
 
 `TerminalModeDSIKeyEventsController` (class-replacement) calls `installTouchpadSink()` on CarPlay
 start and routes `TouchpadController`'s `postDpad(KEY_DPAD_*)` back through the stock DSI bridge

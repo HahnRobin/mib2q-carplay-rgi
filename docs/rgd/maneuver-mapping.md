@@ -19,27 +19,30 @@ reconciles:
 Turns the per-maneuver `0x5202` fields into a BAP `ManeuverDescriptor` (icon + direction + side
 streets). Ground truth = `ManeuverMapper.map()`, validated against Apple's Maps/CarPlay 26.6 binaries.
 
-## Context
+## 📋 Context
 
-> [[rgd-tlv]] - 0x5202 sub-TLVs -> **maneuver-mapping** - type+angle -> icon -> [[bap-fctids]] - FctID 23
+> [rgd-tlv](rgd-tlv.md) - 0x5202 sub-TLVs -> **maneuver-mapping** - type+angle -> icon -> [bap-fctids](bap-fctids.md) - FctID 23
 
 ```mermaid
 flowchart LR
+    accTitle: Maneuver mapping inputs and outputs
+    accDescr: ManeuverMapper turns the 0x5202 maneuver type, exit angle and driving side into a BAP element and direction for FctID 23 and the RendererMapper path.
+
     tlv["0x5202 type(0x03)<br/>+ exitAngle(0x0B)<br/>+ drivingSide(0x08)"] --> mm["ManeuverMapper<br/>type->element, angle->direction"]:::here
     mm --> f23["FctID 23<br/>ManeuverDescriptor"]
     mm --> rend["RendererMapper -> maneuver_render"]
     classDef here fill:#fde68a,stroke:#b45309,color:#000;
 ```
 
-## Inputs
+## 📊 Inputs
 
 - **Type** (`0x5202`/0x03) - `EManeuverType` 0-53, verified against MHI3 dio_manager
   `CDIONavigationMetadataTypeInfo::toString`.
 - **JunctionElementExitAngle** (`0x5202`/0x0B) - signed BE16; `rgd_tlv.c` publishes it as both
-  `turn_angle` and `exit_angle`. See [[rgd-tlv]].
+  `turn_angle` and `exit_angle`. See [rgd-tlv](rgd-tlv.md).
 - **drivingSide** (`0x5202`/0x08) - 0/1; side fallback when the angle is absent.
 
-## Complete type -> BAP element table (0-53)
+## 📊 Complete type -> BAP element table (0-53)
 
 | # | EManeuverType | BAP mainElement | direction |
 |---:|---|---|---|
@@ -86,7 +89,7 @@ wire sentinel (`MAN_TYPE_NOT_SET` in `rgd_tlv.h`) and any type outside `0-53` ar
 that falls through the switch (e.g. a roundabout-family type arriving with the wrong `junctionType`) ->
 `NO_INFO / STRAIGHT`.
 
-## Signed exit angle is the primary direction rule
+## 📌 Signed exit angle is the primary direction rule
 
 Apple normalizes the junction angle sign per traffic side, in **both** maneuver builders
 (`maneuverUpdateWithStep:` and `maneuverUpdateWithGuidanceEvent:`), ending in an `FNEG`:
@@ -101,16 +104,16 @@ fallback when no role-2 angle is present. The `0/+/-1000 = absent` sentinel is o
 (Apple Maps 26.6 never synthesizes it). Apple collapses GEO 86/88 -> accNav 4; GEO 25/35 keep their
 own signed angle. **Type 19 stays a roundabout, not a U-turn.**
 
-## Ramps are one slight turn
+## 💡 Ramps are one slight turn
 
 `OFF_RAMP` / `ON_RAMP` / `HIGHWAY_OFF_RAMP_LEFT|RIGHT` all map to BAP `TURN` + `SLIGHT_L/R`. BAP
 `EXIT_LEFT/RIGHT` is no longer used: even the base EXIT glyph adds a second bend back to straight,
 geometry CarPlay's single angle does not describe. For types 8/9 the angle **sign** only picks the side
 (`rampGoesLeft`; 0 and +/-1000 fall back to `drivingSide`); for 22/23 the side in the type wins even if
 the angle conflicts. The renderer draws the same single bend and, for off-ramps, adds the continuing
-main road (`RendererMapper.withForwardRoad`) - see [[maneuver-renderer]].
+main road (`RendererMapper.withForwardRoad`) - see [maneuver-renderer](../cluster/maneuver-renderer.md).
 
-## Generic angle -> direction
+## ⚙️ Generic angle -> direction
 
 `directionFromTurnAngle` (START_ROUTE, EXIT_FERRY, CHANGE_HIGHWAY) buckets at 45 deg: `<=22` straight,
 `<=67` slight, `<=112` normal, else sharp; `|angle| > 180` keeps the old signed LEFT/RIGHT fallback.
@@ -118,11 +121,11 @@ main road (`RendererMapper.withForwardRoad`) - see [[maneuver-renderer]].
 (`-1` without presence) is normalized to the `1000` "absent" sentinel. `LEFT/RIGHT_TURN_AT_END` keep
 their end-of-road direction (not coarsened by the DSI override).
 
-## Junction gate
+## 🔐 Junction gate
 
 For `junctionType != 0`, only the roundabout-exit family (`junctionType == 1`) is allowed through;
 other junction types fall back so a non-roundabout maneuver never renders a roundabout icon.
 
-## Product gap
+## ⚠️ Product gap
 
 `MAN_TLV_DESCRIPTION` (0x5202/0x02 InstructionText) is parsed but not surfaced on the cluster.

@@ -30,6 +30,9 @@ only the non-altScreen conclusions of the seam audit and marks each against curr
 
 ```mermaid
 flowchart LR
+    accTitle: LD_PRELOAD integration seam
+    accDescr: The five interposed Cinemo symbols sit between the iPhone and the stock dio, libairplay and Cinemo stack, forwarding unmodified while enabling semantic iAP2 injection and the cover-art tap, with altScreen type 111 left as the absent case.
+
     subgraph stock["stays stock (dio + libairplay + Cinemo)"]
         setup["AirPlayReceiverSessionSetup<br/>streams 100/101/110"]
         link["Cinemo iAP2 link state machine"]
@@ -46,14 +49,14 @@ flowchart LR
     setup -->|"type 111 -> unsupported branch"| gap["genuinely absent case<br/>(altScreen - see excluded)"]
 ```
 
-## Context
+## 📋 Context
 
-> Docks onto stock via real PLT/GOT seams. Frame parse + Identify patch -> [[iap2-interception]];
-> the `NmeTransport::Recv` tap feeds [[cover-art]]. Whole-system picture: [[architecture]].
+> Docks onto stock via real PLT/GOT seams. Frame parse + Identify patch -> [iap2-interception](iap2-interception.md);
+> the `NmeTransport::Recv` tap feeds [cover-art](cover-art.md). Whole-system picture: [architecture](../architecture.md).
 > **Excluded here** (altScreen-specific): iOS 26.6 altScreen contract, stream-111 ownership/reconnect,
 > and the tiled-NV12->RGBA decode/presentation path.
 
-## What LD_PRELOAD can really intercept [x]
+## 🔍 What LD_PRELOAD can really intercept [x]
 
 The old blanket rule *"a library's calls to its own exports always bypass `LD_PRELOAD`"* is **false**
 for this binary. Correct rule: **classify each callsite as PLT/GOT (interposable) or direct/local
@@ -73,7 +76,7 @@ about stock; this branch interposes none of them (the `hook_airplay_seams_t` cal
 type **111 hits the unsupported branch**. The hook is therefore not shadowing hidden stock altScreen
 support - it supplies a genuinely absent case. *(RE-derived; not re-checkable from repo source.)*
 
-## Cinemo / NME & iAP2 injection ABI
+## 🌐 Cinemo / NME & iAP2 injection ABI
 
 - **NmeArray layout** `{data@+0, len@+4, capacity@+8, growth@+12}`, return 0 = success - the hook reads
   exactly `data@+0`, `len@+4`, `capacity@+8` on the Encode/Recv arrays. [x]
@@ -87,7 +90,7 @@ support - it supplies a genuinely absent case. *(RE-derived; not re-checkable fr
 - The `0x5200` component schema / presence TLVs are **operationally verified, not independently proven**
   from `AirPlaySender`. *(from-re-notes.)*
 
-## Java replacement ABI & lifecycle
+## 🔄 Java replacement ABI & lifecycle
 
 - **Outer-class ABI** - the replaced stock outer classes preserve every public/protected constructor,
   method, field and superclass/interface descriptor (`javap -protected -s`). *(from-re-notes.)*
@@ -107,7 +110,7 @@ support - it supplies a genuinely absent case. *(RE-derived; not re-checkable fr
   0xffff,0xff,false)`) is removed - `GatedCombiService` now passes scale/altitude straight through so the
   cluster's native readouts stay visible. The historical "Navigation unavailable" concern is moot here.
 
-## Startup, cleanup & process ownership
+## ⚙️ Startup, cleanup & process ownership
 
 - [x] **LD_PRELOAD is scoped to `dio_manager` only** - `carplay_startup.sh` exports the private
   `LD_PRELOAD=$H/libcarplay_hook.so` **only immediately before `exec dio_manager`**; renderers are
@@ -119,7 +122,7 @@ support - it supplies a genuinely absent case. *(RE-derived; not re-checkable fr
 - (!) PID-reuse (recorded-PID check validates `/proc/<pid>` existence, not exe identity) and a fail-open
   `netstat` health check remain bounded risks. *(from-re-notes.)*
 
-## Hardening findings
+## 🔐 Hardening findings
 
 - **FIXED - RGD module work from the ELF constructor** [x] (K1004 investigation, 2026-08-31).
   The exact hook shipped in the standalone `carplay-rgi-new` package used an RGD constructor which
@@ -146,7 +149,7 @@ support - it supplies a genuinely absent case. *(RE-derived; not re-checkable fr
   symbol by accident.
 - **FIXED - host signal dispositions** [x]. The bus's `SIGPIPE` ignore and fault-signal diagnostics go
   through `signal_guard`, which saves `dio_manager`'s previous `sigaction`s, chains fault signals to
-  them, and restores them on shutdown; control signals stay untouched - see [[bus-protocol]].
+  them, and restores them on shutdown; control signals stay untouched - see [bus-protocol](bus-protocol.md).
 - **State trace** - `framework/state_trace.c` (generation-scoped startup trace of iAP2/transport
   markers) is compiled out unless `ENABLE_STATE_TRACE=1`; `build_hook.sh` never sets it, so shipping
   builds carry only inline no-op stubs.
@@ -158,7 +161,7 @@ support - it supplies a genuinely absent case. *(RE-derived; not re-checkable fr
   it rests on stock serializing the relevant NME callbacks. No log proves a race; still an external
   assumption.
 
-## Bottom line
+## 📌 Bottom line
 
 The decisive native seams are present in the exact shipped binaries and are interposed correctly, the
 Java outer-class ABI is preserved, and `LD_PRELOAD` is confined to `dio_manager`. The **RGD module and

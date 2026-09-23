@@ -18,27 +18,30 @@ reconciles:
 How the instrument cluster (LVDS2 / terminal 1) is composed, and how the patch owns exactly one
 custom context without fighting native nav.
 
-## Context
+## 📋 Context
 
-> [[rgd-activation]] - setNavActive -> **display-contexts** - switch ctx 74<->80 -> [[compositing]] -
-> HU encodes -> MOST -> VC. Geometry of the planes: [[kdk-geometry]].
+> [rgd-activation](../rgd/rgd-activation.md) - setNavActive -> **display-contexts** - switch ctx 74<->80 -> [compositing](compositing.md) -
+> HU encodes -> MOST -> VC. Geometry of the planes: [kdk-geometry](kdk-geometry.md).
 
-## Displayables
+## 📊 Displayables
 
 | id | owner | role |
 |---:|---|---|
 | 33 | stock | native cluster map (also in stock ctx 74) |
-| 98 | `maneuver_render` | maneuver overlay, **transparent when idle** ([[maneuver-renderer]]) |
+| 98 | `maneuver_render` | maneuver overlay, **transparent when idle** ([maneuver-renderer](maneuver-renderer.md)) |
 | 101 / 102 | stock (987 Image backings) | KDK backing planes (sport / popup) |
 
 `maneuver_render` opens a managed screen window with `ID_STRING="98"` via `cluster_surface`
 (raw `screen_create/manage_window`, no `libdisplayinit`). Id 98 has **no stock owner**, so there is
-no last-writer-wins war with native nav - see [[compositing]].
+no last-writer-wins war with native nav - see [compositing](compositing.md).
 
-## Contexts (A5-class; declared in `DisplayManagerMIB2High.defineContexts`)
+## 🧭 Contexts (A5-class; declared in `DisplayManagerMIB2High.defineContexts`)
 
 ```mermaid
 flowchart LR
+    accTitle: Stock and CarPlay display contexts
+    accDescr: Context 74 holds the stock KDK and native map, context 80 holds the maneuver displayable, KDK backing and map, with RGI BAP start and route end switching between them.
+
     subgraph c74["dc[74] - stock (idle)"]
         direction TB
         n1["KDK large"] --- n2["KDK small"] --- n3["native map 33"]
@@ -58,13 +61,16 @@ flowchart LR
 `getMappedInternalContext` is identity on MIB2High, so `switchContext(80)` lands on exactly the
 declared context. G24 clusters have no such composition and the feature is disabled there.
 
-## The switch worker (single serialized writer)
+## ⚙️ The switch worker (single serialized writer)
 
 `ScreenModule` runs **one** persistent worker - the sole caller of `switchContext` / `setUpdateRate`,
 so two switches can never race:
 
 ```mermaid
 stateDiagram-v2
+    accTitle: Context switch worker states
+    accDescr: Entering ctx 80 bounces through context 72 with a settle delay and rate changes, and leaving ctx 80 drops the update rate, switches to 74 and restores the rate.
+
     direction LR
     [*] --> Stock74
     Stock74 --> Bounce72: enter ctx 80 (encoder was off)
@@ -74,7 +80,7 @@ stateDiagram-v2
 
 - `desiredCtx = (connected && navActive) ? 80 : 74` - pure function, worker converges to it
   (reconciled every 250 ms).
-- `navActive` is set by `RouteGuidance` on a successful BAP start ([[rgd-activation]]). On route end
+- `navActive` is set by `RouteGuidance` on a successful BAP start ([rgd-activation](../rgd/rgd-activation.md)). On route end
   `setNavActive(false)` keeps it true (`navHidePending`) while `ClusterLayerController.isKdkVisible()`,
   i.e. while the VC is still fading its KDK out; `onVcKdkVisibility(false)` (FctID 44) then releases it.
   If the KDK is already hidden, the release is immediate. There is no hold timer.
@@ -86,4 +92,4 @@ stateDiagram-v2
 
 On disconnect the worker restores stock 74 (and clears any pending hide); it is never killed, so no
 stale per-session worker can outlive its session. Layer opacity inside ctx 80 is
-`ClusterLayerController`'s job - see [[kdk-geometry]].
+`ClusterLayerController`'s job - see [kdk-geometry](kdk-geometry.md).

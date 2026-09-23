@@ -19,15 +19,15 @@ reconciles:
 
 All CarPlay route text on the VC goes into **FctID 19 CurrentPositionInfo** - one UTF-8 field of at
 most 96 bytes. FctID 20 TurnToInfo is sent as `("", "")` during RGI and stock writes to it are gated
-([[bap-fctids]]). FctID 22 always carries the absolute arrival clock (`timeInfoType = 1`; type 0 blanks
+([bap-fctids](bap-fctids.md)). FctID 22 always carries the absolute arrival clock (`timeInfoType = 1`; type 0 blanks
 the VC's distance/arrival block).
 
-## Context
+## 📋 Context
 
-> [[rgd-activation]] - active -> **vc-route-text** - FctID 19 fragments -> VC lower bar.
-> Phase toggle: [[steering-wheel]].
+> [rgd-activation](rgd-activation.md) - active -> **vc-route-text** - FctID 19 fragments -> VC lower bar.
+> Phase toggle: [steering-wheel](../input/steering-wheel.md).
 
-## What is shown
+## 🔍 What is shown
 
 | View | Phase 0 (default) | Phase 1 (after roller OK) |
 |---|---|---|
@@ -46,7 +46,7 @@ the VC's distance/arrival block).
 - The 12/24 h clock follows the HU setting; the arrival epoch is shifted from the JVM's UTC to HU local
   time before `AppConnectorNavi` formats it.
 
-## Scrolling (`CurrentPositionScroll`)
+## 🔄 Scrolling (`CurrentPositionScroll`)
 
 Text that does not fit is split into fragments, and only FctID 19 is rewritten on each tick:
 
@@ -67,7 +67,7 @@ Text that does not fit is split into fragments, and only FctID 19 is rewritten o
 - The scroll is suspended while the presentation is not confirmed, and restarts on a new maneuver,
   maneuver version or `route_generation`.
 
-## Glyph metrics in the JAR
+## 📊 Glyph metrics in the JAR
 
 `VCTextData` loads `vc-text.bin` once (magic `VCT2`) from the classpath: per-code-point glyph advances
 of the VC fonts plus pinned **Unicode 17** property, decomposition and composition tables, packed as
@@ -76,6 +76,6 @@ independent of the HU's old `Character`/`BreakIterator` data - no fonts, AWT, IC
 unit. `scripts/build_java.sh` copies `java_resources/` into the class tree before `jar cf`, so the table
 (and `META-INF/UNICODE-LICENSE.txt`) ship inside `carplay_hook.jar`.
 
-## Open
+## 🤔 Open
 
 - (!) U+25CC is taken from the VC's supplementary fonts; how the unit renders it when a face lacks it is untested on-car.
