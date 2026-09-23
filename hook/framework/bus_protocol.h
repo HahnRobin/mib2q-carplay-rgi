@@ -24,7 +24,7 @@
  *     Compatible with the existing text Data parser so migration of
  *     RouteGuidance consumers is mechanical.  No chunking needed - TCP
  *     delivers the whole frame atomically.
- *   - With BUS_FLAG_BINARY: type-specific packed struct.  Used by cursor
+ *   - With BUS_FLAG_BINARY: type-specific packed struct.  Used by binary commands
  *     and any future low-latency binary channel.
  *
  * Sticky state:
@@ -83,13 +83,33 @@
 /* ============================================================
  * Command types (Java -> Hook)
  *   0x0100 .. 0x01FF : meta / control
- *   0x0300 ..        : reserved for future categories
- * (0x0200 .. 0x02FF was the cursor namespace; removed when the
- *  on-screen cursor feature was dropped - ghost was architectural
- *  on MU1316, see project_cursor_ghost_architectural_block memory.)
+ *   0x0200 ..        : reserved
  * ============================================================ */
 #define CMD_SYNC_REQ            0x0100  /* request sticky-state snapshot     */
 #define CMD_PING                0x0101  /* echo test                         */
+
+/* AltScreen commands — Java→hook (bidirectional bus).  BINARY payloads.       */
+#define CMD_ALT_ZOOM            0x0110  /* binary [int8 signed MapScale step]  */
+                                        /* hook emits UUID-addressed           */
+                                        /* changeMapZoomLevel (0=in, 1=out)    */
+#define CMD_ALT_ZONE            0x0111  /* [u8 0=full/1=sport/2=classic][u16 LE durationMs] */
+                                        /* hook maps each mode to the matching */
+                                        /* primary+adjacent viewAreas          */
+#define CMD_ALT_ZONE_ACK        0x0112  /* hook→Java confirmation for a switch */
+                                        /* binary [u8 mode][i32 LE status]     */
+                                        /* status 0 = phone applied it, else   */
+                                        /* OSStatus/send error                 */
+/* More MHI3-ported session commands (Java→hook), all via AirPlayReceiverSessionSendCommand. */
+/* 0x0113 remains reserved (zoom uses the deployed 0x0110 ABI). */
+#define CMD_ALT_APPEARANCE      0x0114  /* binary [u8 target][u8 mode][u8 set] */
+                                        /* target 0=ui 1=map; day/night sync   */
+#define CMD_ALT_UICTX           0x0115  /* payload = UTF-8 url string — deep-  */
+                                        /* link cluster UI context             */
+#define CMD_ALT_RGI             0x0116  /* binary [u8 0=off 1=on] — Java's     */
+                                        /* confirmed RGI presentation; hook    */
+                                        /* picks the Maps cluster URL (showUI) */
+/* NOTE: dispatchable inbound types must be < MAX_TYPES in bus.c (grown to      */
+/* cover this 0x11x block).                                                     */
 
 /* ============================================================
  * Classification helpers (header range checks, optional)

@@ -8,6 +8,7 @@
  * framework through hook_module_def_t; the framework reaches them only through
  * hook_module_table (hook/main.c). */
 #include "hook_framework.h"
+#include "state_trace.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -447,6 +448,9 @@ static void handle_state_messages(uint16_t msgid) {
             g_fw.ctx.auth_done = false;
             g_fw.ctx.session_active = false;
             g_fw.ctx.rgd_component_valid = false;
+#if ENABLE_STATE_TRACE
+            g_fw.ctx.lifecycle_generation = state_trace_begin_generation();
+#endif
             clear_injection_context();
             /* New session boundary — let the transport-recv sink (cover art)
              * drop any half-reassembled stream from a prior session. */
@@ -456,9 +460,12 @@ static void handle_state_messages(uint16_t msgid) {
         case IAP2_MSG_IDENTIFY_ACCEPTED:
             g_fw.ctx.identify_accepted = true;
             LOG_INFO(LOG_MODULE, "Identify accepted (0x1D02)");
+            STATE_TRACE("IAP_IDENTIFY_ACCEPTED", "msg=0x1d02");
             notify_state(HOOK_EVENT_IDENTIFY_OK, NULL);
             break;
         case IAP2_MSG_IDENTIFY_END:
+            STATE_TRACE("IAP_IDENTIFY_END", "msg=0x1d03 session_active=%d",
+                        g_fw.ctx.session_active ? 1 : 0);
             if (!g_fw.ctx.session_active) {
                 notify_state(HOOK_EVENT_IDENTIFY_END, NULL);
             }
@@ -466,6 +473,7 @@ static void handle_state_messages(uint16_t msgid) {
         case IAP2_MSG_AUTH_COMPLETE:
             g_fw.ctx.auth_done = true;
             LOG_INFO(LOG_MODULE, "Auth complete (0xAA05)");
+            STATE_TRACE("IAP_AUTH_COMPLETE", "msg=0xaa05");
             notify_state(HOOK_EVENT_AUTH_DONE, NULL);
             break;
         case IAP2_MSG_STOP_LOCATION:
@@ -583,11 +591,14 @@ hook_result_t hook_framework_init(void) {
     }
     pthread_mutex_unlock(&g_fw.lock);
 
-    /* Production-visible proof that ldqnx completed and a real interposed
-     * Cinemo boundary, rather than an ELF constructor, started the hook. */
+    /* One production-visible breadcrumb.  Absence means no interposed Cinemo
+     * boundary was ever reached; presence proves ldqnx completed the preload
+     * and the hook entered only after normal dio runtime began. */
     if (!already_initialized)
         LOG_WARN(LOG_MODULE,
                  "lazy runtime init complete (constructor-free; first Cinemo boundary)");
+    if (!already_initialized)
+        STATE_TRACE("HOOK_RUNTIME_INIT", "pid=%d", (int)getpid());
 
     /* Start/retry the TCP bus only in dio_manager.  Safe here: init is lazy on
      * a real Cinemo call, not in the LD_PRELOAD constructor. */
@@ -628,6 +639,7 @@ void hook_framework_shutdown(void) {
     pthread_mutex_unlock(&g_fw.lock);
 
     notify_state(HOOK_EVENT_SHUTDOWN, NULL);
+    STATE_TRACE("HOOK_SHUTDOWN", "pid=%d", (int)getpid());
 
     /* Module destructors used to run in unspecified ELF order, including when
      * framework initialisation had never happened.  Keep teardown ordered and
@@ -724,6 +736,16 @@ hook_context_t* hook_framework_get_context(void) {
     return &g_fw.ctx;
 }
 
+size_t hook_framework_module_count(void) {
+    return (size_t)g_fw.module_count;
+}
+
+const hook_module_def_t* hook_framework_module_at(size_t index) {
+    if (index >= (size_t)g_fw.module_count) return NULL;
+    if (!g_fw.modules[index].active) return NULL;
+    return &g_fw.modules[index].def;
+}
+
 /* Send an additional iAP2 frame without consuming the stock carrier. */
 hook_result_t hook_inject_frame(const uint8_t* frame, size_t frame_len) {
     uint8_t link_session;
@@ -794,7 +816,7 @@ uint16_t hook_get_component_id(void) {
  * retain exactly one hook-owned reference.  This is the stable object whose
  * SendIAP2 method enters Cinemo's normal link state machine; no libairplay or
  * libNmeSDK-internal interposition is assumed here. */
-int CinemoCreateIAP(void* args) {
+HOOK_EXPORT int CinemoCreateIAP(void* args) {
     void* new_iap = NULL;
     void* old_iap = NULL;
     int old_owner_pid = 0;
@@ -808,6 +830,8 @@ int CinemoCreateIAP(void* args) {
     }
 
     ret = g_fw.real_cinemo_create_iap(args);
+    STATE_TRACE("CINEMO_CREATE_IAP", "result=%d object_present=%d",
+                ret, (ret == 0 && args && *(void**)args) ? 1 : 0);
     if (ret != 0 || !args || !g_fw.real_iap_addref || !g_fw.real_iap_release)
         return ret;
 
@@ -835,7 +859,7 @@ int CinemoCreateIAP(void* args) {
     return ret;
 }
 
-int _ZN14NmeIAP2Message6DecodeEPKhi(void* self, const uint8_t* buf, int len) {
+HOOK_EXPORT int _ZN14NmeIAP2Message6DecodeEPKhi(void* self, const uint8_t* buf, int len) {
     if (!g_fw.initialized || (!g_fw.bus_started && !g_fw.bus_disabled))
         hook_framework_init();
     resolve_functions();
@@ -869,12 +893,14 @@ int _ZN14NmeIAP2Message6DecodeEPKhi(void* self, const uint8_t* buf, int len) {
         .payload = (frame_len > 6) ? (buf + 6) : NULL,
         .payload_len = (frame_len > 6) ? (frame_len - 6) : 0
     };
+    state_trace_note_iap_semantic(MSG_DIR_INCOMING, msgid,
+                                  frame.payload, frame.payload_len);
     dispatch_message(&frame);
 
     return ret;
 }
 
-int _ZNK14NmeIAP2Message6EncodeER8NmeArrayIhE(const void* self, void* out_array) {
+HOOK_EXPORT int _ZNK14NmeIAP2Message6EncodeER8NmeArrayIhE(const void* self, void* out_array) {
     if (!g_fw.initialized || (!g_fw.bus_started && !g_fw.bus_disabled))
         hook_framework_init();
     resolve_functions();
@@ -937,14 +963,24 @@ int _ZNK14NmeIAP2Message6EncodeER8NmeArrayIhE(const void* self, void* out_array)
         log_unknown_52xx_msg(data, dump_len, frame.msgid, MSG_DIR_OUTGOING);
     }
 
+    if (frame.msgid == IAP2_MSG_IDENTIFY)
+        STATE_TRACE("IAP_IDENTIFY_PAYLOAD",
+                    "msg=0x1d01 bytes=%u patched=%d",
+                    (unsigned)frame.frame_len,
+                    g_fw.ctx.identify_patched ? 1 : 0);
+    state_trace_note_iap_semantic(MSG_DIR_OUTGOING, frame.msgid,
+                                  frame.payload, frame.payload_len);
+
     dispatch_message(&frame);
 
     return ret;
 }
 
-int _ZN12NmeTransport4SendEPKhjPj(void* self, const uint8_t* buf, unsigned int len, unsigned int* sent) {
+HOOK_EXPORT int _ZN12NmeTransport4SendEPKhjPj(void* self, const uint8_t* buf, unsigned int len, unsigned int* sent) {
     iap2_frame_t frame;
+    iap2_link_header_t header;
     bool have_frame = false;
+    bool have_header = false;
     int ret;
 
     if (!g_fw.initialized || (!g_fw.bus_started && !g_fw.bus_disabled))
@@ -955,10 +991,20 @@ int _ZN12NmeTransport4SendEPKhjPj(void* self, const uint8_t* buf, unsigned int l
 
     if (buf && len >= 6)
         have_frame = iap2_find_frame(buf, (size_t)len, &frame);
+    if (have_frame && frame.offset >= 9u)
+        have_header = iap2_parse_link_header(buf, frame.offset, &header);
 
     /* The stock message must be committed first.  In particular LocationInfo
      * is never consumed or delayed as an injection carrier. */
     ret = g_fw.real_transport_send(self, buf, len, sent);
+    if (have_frame)
+        state_trace_note_iap_transport_tx(
+            frame.msgid, ret, sent ? (int)*sent : -1, have_header ? 1 : 0,
+            have_header ? header.ctrl : 0,
+            have_header ? header.seq : 0,
+            have_header ? header.ack : 0,
+            have_header ? header.session : 0,
+            have_header ? header.length : (uint16_t)len);
     if (ret != 0 || !have_frame) return ret;
 
     store_injection_context(buf, (size_t)len, frame.offset);
@@ -973,7 +1019,7 @@ int _ZN12NmeTransport4SendEPKhjPj(void* self, const uint8_t* buf, unsigned int l
  * NmeArray<uchar> (data@+0, len@+4 — same layout Encode uses) to the sink.
  * Fail-safe mirrors the Send hook: if the real symbol didn't resolve we return
  * -1 (same behaviour already deployed for Send). */
-int _ZN12NmeTransport4RecvER8NmeArrayIhE(void* self, void* out_array) {
+HOOK_EXPORT int _ZN12NmeTransport4RecvER8NmeArrayIhE(void* self, void* out_array) {
     if (!g_fw.initialized || (!g_fw.bus_started && !g_fw.bus_disabled))
         hook_framework_init();
     resolve_functions();
@@ -1007,6 +1053,7 @@ int _ZN12NmeTransport4RecvER8NmeArrayIhE(void* self, void* out_array) {
     /* Tap only on success.  On an error return the array may hold stale bytes;
      * re-feeding them would corrupt the reassembler with duplicates. */
     if (ret == 0 && have) {
+        state_trace_feed_iap_transport_rx(data, len);
         notify_transport_recv(data, len);
     }
     return ret;
@@ -1018,8 +1065,9 @@ int _ZN12NmeTransport4RecvER8NmeArrayIhE(void* self, void* out_array) {
 
 /* No LD_PRELOAD constructor.  hook_framework_init() — and therefore module registration,
  * logging, bus_init() and its process-wide fault handlers — must NOT run during
- * dio_manager's dlopen/link.  Every hooked Cinemo/NME boundary lazily calls it, so
- * hook-owned work begins only after the loader has returned to normal runtime. */
+ * dio_manager's dlopen/link, before dio has initialised itself.  Every hooked Cinemo/NME
+ * boundary lazily calls hook_framework_init() on its first invocation, so all hook-owned
+ * work starts on the first real iAP2 call. */
 __attribute__((destructor))
 static void hook_lib_fini(void) {
     hook_framework_shutdown();

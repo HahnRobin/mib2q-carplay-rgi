@@ -93,6 +93,7 @@ static struct {
 	    uint32_t slot_ver[MANEUVER_CACHE_SIZE];        /* assignment version (bumps only on reassignment) */
 	    uint32_t seq_counter;
 	    uint32_t ver_counter;
+    uint64_t route_generation; /* survives slot-version reuse at native route reset */
 	    uint16_t highest_list_index;  /* max iOS index ever seen in maneuver_list */
 	    /*
 	     * Lane guidance is keyed by iOS composedGuidanceEventIndex, not by
@@ -220,6 +221,13 @@ static void rgd_update_cache_merge(const rgd_update_t* upd) {
 }
 
 		static void rgd_maneuver_map_reset(void) {
+            /* Java may never see a debounced route_state=0. A monotonic-clock
+             * generation distinguishes reused slot versions, including a new
+             * hook process while the Java session is still alive. */
+            uint64_t generation = now_monotonic_ms();
+            if (generation <= g_rgd.route_generation)
+                generation = g_rgd.route_generation + 1;
+            g_rgd.route_generation = generation;
 		    g_rgd.current_list_present = false;
 		    g_rgd.current_list_count = 0;
 		    g_rgd.seq_counter = 0;
@@ -363,7 +371,7 @@ static int rgd_slot_for_iap_index(uint16_t idx, bool create) {
         }
     }
     if (victim < 0) {
-        /* All slots are in the active list (shouldn't happen with 8 slots
+        /* All slots are in the active list (shouldn't happen with MANEUVER_CACHE_SIZE=32 slots
          * and max 2-3 active maneuvers).  Fall back to true LRU. */
         best = UINT32_MAX;
         for (int s = 0; s < MANEUVER_CACHE_SIZE; s++) {
@@ -438,7 +446,8 @@ static uint16_t rgd_msg_filter[] = {
 };
 
 /* Module definition.  Route guidance is pure iAP2: it wants Identify, three
- * 0x52xx messages, the session state edges and outgoing transport frames. */
+ * 0x52xx messages, the session state edges and outgoing transport frames, and
+ * nothing from the AirPlay side at all. */
 const hook_module_def_t rgd_module_def = {
     .name = "routeguidance",
     .priority = HOOK_PRIORITY_NORMAL,
@@ -659,6 +668,8 @@ static void write_lane_data_keys(bus_text_builder_t* b, unsigned idx, const rgd_
 
     snprintf(key, sizeof(key), "lg%u_lane_count", idx);
     bus_text_int(b, key, lane->lane_count);
+    snprintf(key, sizeof(key), "lg%u_lane_complete", idx);
+    bus_text_int(b, key, lane->lane_complete);
 
     {
         char buf[128];
@@ -728,6 +739,8 @@ static void write_lane_clear_keys(bus_text_builder_t* b, unsigned idx) {
     bus_text_int(b, key, -1);
     snprintf(key, sizeof(key), "lg%u_lane_count", idx);
     bus_text_int(b, key, -1);
+    snprintf(key, sizeof(key), "lg%u_lane_complete", idx);
+    bus_text_int(b, key, 0);
     snprintf(key, sizeof(key), "lg%u_lane_positions", idx);
     bus_text_str(b, key, "");
     snprintf(key, sizeof(key), "lg%u_lane_directions", idx);
@@ -991,6 +1004,7 @@ static void write_bus_snapshot_from_cache(int extra_slot, const rgd_maneuver_t* 
         return;
     }
 
+    bus_text_uint(b, "route_generation", g_rgd.route_generation);
     if (present & RGD_UPD_ROUTE_STATE)
         bus_text_int(b, "route_state", upd->route_state);
     if (present & RGD_UPD_MANEUVER_STATE)
@@ -1195,6 +1209,7 @@ void rgd_clear_state(const char* reason) {
         bus_text_builder_t* b = &_b_storage;
         uint8_t scratch[256];
         bus_text_begin_with(b, "routeguidance", scratch, sizeof(scratch));
+        bus_text_uint(b, "route_generation", g_rgd.route_generation);
         bus_text_int(b, "route_state", RGD_STATE_NOT_ACTIVE);
         bus_text_int(b, "maneuver_count", 0);
         if (reason) bus_text_str(b, "disconnect_reason", reason);
@@ -1337,13 +1352,16 @@ static bool rgd_message_handler(hook_context_t* ctx, const iap2_frame_t* frame) 
     rgd_lazy_init();  /* Ensure bus/session state is ready */
 
     if (frame->msgid == IAP2_MSG_ROUTE_GUIDANCE_UPDATE) {
-        rgd_mark_first_response(frame->msgid);
 #if RGD_TRACE_RAW_FULL
         rgd_log_raw_packet("RGD 0x5201 raw", ctx->raw_buf, frame->frame_len);
 #endif
 
         rgd_update_t upd;
-        rgd_parse_update(ctx->raw_buf, frame->frame_len, &upd);
+        if (!rgd_parse_update(ctx->raw_buf, frame->frame_len, &upd)) {
+            LOG_WARN(LOG_MODULE, "Ignored malformed RGD message 0x%04X", frame->msgid);
+            return false; /* Preserve stock dispatch; publish no partial delta. */
+        }
+        rgd_mark_first_response(frame->msgid);
 
         LOG_INFO(LOG_MODULE, "Update: state=%u road=\"%s\" dest=\"%s\"",
                  upd.route_state, upd.current_road, upd.destination);
@@ -1423,13 +1441,16 @@ static bool rgd_message_handler(hook_context_t* ctx, const iap2_frame_t* frame) 
             write_bus_update_partial(&upd);
     }
     else if (frame->msgid == IAP2_MSG_ROUTE_GUIDANCE_MANEUVER) {
-        rgd_mark_first_response(frame->msgid);
 #if RGD_TRACE_RAW_FULL
         rgd_log_raw_packet("RGD 0x5202 raw", ctx->raw_buf, frame->frame_len);
 #endif
 
         rgd_maneuver_t man;
-        rgd_parse_maneuver(ctx->raw_buf, frame->frame_len, &man);
+        if (!rgd_parse_maneuver(ctx->raw_buf, frame->frame_len, &man)) {
+            LOG_WARN(LOG_MODULE, "Ignored malformed RGD message 0x%04X", frame->msgid);
+            return false; /* Preserve stock dispatch; publish no partial delta. */
+        }
+        rgd_mark_first_response(frame->msgid);
 
         LOG_INFO(LOG_MODULE, "Maneuver: idx=%u type=%u desc=\"%s\"",
                  man.index, man.maneuver_type, man.description);
@@ -1437,13 +1458,16 @@ static bool rgd_message_handler(hook_context_t* ctx, const iap2_frame_t* frame) 
         write_bus_maneuver_partial(&man);
     }
     else if (frame->msgid == IAP2_MSG_ROUTE_GUIDANCE_LANE) {
-        rgd_mark_first_response(frame->msgid);
 #if RGD_TRACE_RAW_FULL
         rgd_log_raw_packet("RGD 0x5204 raw", ctx->raw_buf, frame->frame_len);
 #endif
 
         rgd_lane_guidance_t lane;
-        rgd_parse_lane_guidance(ctx->raw_buf, frame->frame_len, &lane);
+        if (!rgd_parse_lane_guidance(ctx->raw_buf, frame->frame_len, &lane)) {
+            LOG_WARN(LOG_MODULE, "Ignored malformed RGD message 0x%04X", frame->msgid);
+            return false; /* Preserve stock dispatch; publish no partial delta. */
+        }
+        rgd_mark_first_response(frame->msgid);
 
         LOG_INFO(LOG_MODULE, "Lane guidance: idx=%u lanes=%u desc=\"%s\"",
                  lane.lane_guidance_index, lane.lane_count, lane.lane_guidance_description);

@@ -8,7 +8,7 @@
  *   - bus_init()  spawns a listener thread (accepts clients on 19810)
  *                 and a writer thread (drains the send queue).
  *   - bus_send()  is thread-safe: enqueues a frame and wakes the writer.
- *                 Never blocks on network I/O.  Safe from iAP2 hook
+ *                 Never blocks on network I/O.  Safe from iAP2/OMX hook
  *                 threads.
  *   - bus_on()    registers a dispatcher callback for a given inbound
  *                 type.  Callback is invoked on the reader thread - must

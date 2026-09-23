@@ -17,7 +17,9 @@
 #include "../framework/common.h"
 
 /* Raw RGD packet tracing (opt-in: build with -DRGD_TRACE_RAW_FULL=1). Value-based (#if) so a
- * -D...=0 build is consistent between the struct fields below and every writer. */
+ * -D...=0 build is consistent between the struct fields below and every writer. Presence-based
+ * #ifdef would make -D...=0 enable the trace, and — worse — would give rgd_tlv.c a different
+ * rgd_maneuver_t layout from rgd_hook.c the moment any translation unit sees a default define. */
 #ifndef RGD_TRACE_RAW_FULL
 #define RGD_TRACE_RAW_FULL 0
 #endif
@@ -269,6 +271,7 @@ typedef struct {
     uint16_t lane_guidance_index;
     rgd_lane_t lanes[MAX_LANE_GUIDANCE];
     uint8_t lane_count;
+    uint8_t lane_complete; /* full, explicit ordered snapshot; no capacity truncation */
     char lane_guidance_description[64];
 } rgd_lane_guidance_t;
 
@@ -386,14 +389,16 @@ typedef struct {
  * Parsing Functions
  * ============================================================ */
 
+/* Parse complete iAP2 messages. False rejects the entire malformed delta;
+ * output remains empty (maneuver linked-lane sentinel remains 0xFFFF). */
 /* Parse RouteGuidanceUpdate (0x5201) payload */
-void rgd_parse_update(const uint8_t* buf, size_t len, rgd_update_t* out);
+bool rgd_parse_update(const uint8_t* buf, size_t len, rgd_update_t* out);
 
 /* Parse RouteGuidanceManeuverUpdate (0x5202) payload */
-void rgd_parse_maneuver(const uint8_t* buf, size_t len, rgd_maneuver_t* out);
+bool rgd_parse_maneuver(const uint8_t* buf, size_t len, rgd_maneuver_t* out);
 
 /* Parse RouteGuidanceLaneGuidanceInformation (0x5204) payload */
-void rgd_parse_lane_guidance(const uint8_t* buf, size_t len, rgd_lane_guidance_t* out);
+bool rgd_parse_lane_guidance(const uint8_t* buf, size_t len, rgd_lane_guidance_t* out);
 
 /* ============================================================
  * Building Functions (for Identify patching)

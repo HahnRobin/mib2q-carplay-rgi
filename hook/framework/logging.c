@@ -6,7 +6,7 @@
 
 #include "logging.h"
 
-#if ENABLE_LOGGING
+#if ENABLE_LOGGING || ENABLE_STATE_TRACE || ENABLE_ALTSCREEN_PACE_TRACE
 
 /* Maximum tracked dump files for once-only dumps */
 #define MAX_DUMP_FILES 32
@@ -141,7 +141,14 @@ static void* log_writer_main(void* unused) {
         pthread_mutex_lock(&g_log.lock);
         while (!g_log.shutdown && g_log.queue_count == 0)
             pthread_cond_wait(&g_log.cond, &g_log.lock);
+#if (ENABLE_STATE_TRACE || ENABLE_ALTSCREEN_PACE_TRACE) && !ENABLE_LOGGING
+        /* Trace-only shutdown is itself evidence. Drain already-enqueued
+         * terminal records before exiting; log_shutdown still caps the wait,
+         * so a wedged filesystem cannot become a watchdog hang. */
+        if (g_log.shutdown && g_log.queue_count == 0) {
+#else
         if (g_log.shutdown) {
+#endif
             g_log.writer_running = false;
             pthread_cond_broadcast(&g_log.cond);
             pthread_mutex_unlock(&g_log.lock);
@@ -181,7 +188,7 @@ static bool log_start_writer_locked(void) {
  * matching the Java side's /mnt/app/carplay_verbose.  MUST be shared by log_init() and the lazy
  * auto-init in log_write(): nothing actually calls log_init() (hook_framework.c keeps logging lazy on
  * purpose), so when this check lived only in log_init() the marker was dead code and INFO could never
- * be enabled at all — which is exactly how a session of diagnostic probes came back empty. */
+ * be enabled at all — which is exactly how a session of audio probes came back empty. */
 static void log_apply_defaults_locked(void) {
     log_config_t def = LOG_CONFIG_DEFAULT;
     g_log.config = def;
@@ -239,7 +246,9 @@ void log_shutdown(void) {
     }
 
     g_log.shutdown = true;
+#if !((ENABLE_STATE_TRACE || ENABLE_ALTSCREEN_PACE_TRACE) && !ENABLE_LOGGING)
     g_log.queue_head = g_log.queue_tail = g_log.queue_count = 0;
+#endif
     pthread_cond_broadcast(&g_log.cond);
     while (g_log.writer_created && g_log.writer_running &&
            waited_ms < LOG_SHUTDOWN_WAIT_MS) {
@@ -299,12 +308,7 @@ void log_set_level(log_level_t level) {
 }
 
 log_level_t log_get_level(void) {
-    log_level_t level;
-    ensure_lock_init();
-    pthread_mutex_lock(&g_log.lock);
-    level = g_log.config.min_level;
-    pthread_mutex_unlock(&g_log.lock);
-    return level;
+    return g_log.config.min_level;
 }
 
 void log_write(log_level_t level, const char* module, const char* fmt, ...) {
@@ -404,6 +408,8 @@ void log_write(log_level_t level, const char* module, const char* fmt, ...) {
     pthread_mutex_unlock(&g_log.lock);
 }
 
+#if ENABLE_LOGGING
+
 void log_hexdump(log_level_t level, const char* module, const char* prefix,
                  const uint8_t* data, size_t len, size_t max_bytes) {
     if (!data || len == 0) return;
@@ -480,3 +486,5 @@ hook_result_t log_dump_file_once(const char* path, const uint8_t* data, size_t l
 }
 
 #endif /* ENABLE_LOGGING */
+
+#endif /* Logging or scoped trace writer. */
