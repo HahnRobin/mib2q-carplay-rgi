@@ -173,7 +173,7 @@ copies the tree with atomic renames, patches both configs in place and keeps a `
 backup of each; it never stops processes or reboots. To remove everything, run
 `uninstall_MoreIncredibleBash/` the same way.
 
-**Manually over SSH.** Root shell, `mount -uw /mnt/app` and `/mnt/system`, copy the files, back up and
+**Manually** (no M.I.B.; needs a root shell on the unit over SSH or Telnet). `mount -uw /mnt/app` and `/mnt/system`, copy the files, back up and
 edit the two configs as text (`dio_manager.json` has `##` comment lines - no JSON tools).
 
 The step-by-step guide for both - the SD layout, installer output and warnings, the exact SI child and

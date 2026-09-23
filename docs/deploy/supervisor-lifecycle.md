@@ -47,7 +47,7 @@ sequenceDiagram
 
 ## 🚀 Install
 
-What goes where on the unit, the M.I.B. installer, the manual SSH install and the uninstall are in
+What goes where on the unit, the M.I.B. installer, the manual install and the uninstall are in
 [install](install.md). The runtime-relevant facts: the three `carplay_*.sh`, `libcarplay_hook.so`,
 `maneuver_render` and `flag_atlas.rgba` live in `/mnt/app/root/hooks/`; `children.carplay` in
 `smartphone_integrator.json` is replaced by `carplay_child.json`; `dio_manager.json` must list the

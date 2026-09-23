@@ -15,7 +15,7 @@ reconciles:
 # Install, verify and uninstall
 
 *The build scripts only produce loose binaries. A release is staged by hand and installed either with
-the M.I.B. custom script (recommended) or by hand over SSH. Both do exactly the same thing: copy seven
+the M.I.B. custom script (recommended) or by hand in a root shell on the unit. Both do exactly the same thing: copy seven
 files, replace one SI child and register five iAP2 message IDs. Nothing is started, stopped or
 rebooted for you.*
 
@@ -138,14 +138,16 @@ and never overwritten by a patched file.
 
 **4. Flush and reboot** - see [Reboot and verify](#-reboot-and-verify).
 
-## 🔧 Manual install over SSH (without M.I.B.)
+## 🔧 Manual install (without M.I.B.)
 
-The same install by hand, in a root shell on the unit. Disconnect CarPlay first. Put the release files
-somewhere on the unit (an SD card or USB stick works) and `cd` there.
+The same install by hand. You need a **root shell on the unit, over SSH or Telnet**, whichever your
+unit has enabled. How you get one and the address to connect to depend on your unit; this guide does
+not assume either. Disconnect CarPlay first. Put the release files somewhere on the unit (an SD card
+or USB stick works) and `cd` there.
 
 ```mermaid
 sequenceDiagram
-  accTitle: Manual install steps over SSH
+  accTitle: Manual install steps in a root shell
   accDescr: Remount both partitions writable, copy the seven files and set their modes, edit the SI child and dio_manager.json as text, then sync, wait and reboot manually.
 
   participant you as 🧑 You
@@ -367,7 +369,8 @@ it does nothing until the JVM restarts, and killing j9 counts as a critical-proc
 restarts the whole system (about 50 s, screen black). A redeployed `libcarplay_hook.so` is picked up by
 the next `dio_manager` generation; the jar only by a reboot.
 
-**The unit's shell is bare QNX 6.5.** Pushing files over SSH fails in predictable ways:
+**The unit's shell is bare QNX 6.5.** Pushing files over SSH (the host-side snippets above) fails in
+predictable ways:
 
 | Trap | Fix |
 |---|---|

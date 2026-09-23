@@ -44,7 +44,7 @@ final verified fact. `reconciles:` frontmatter records which legacy docs were fo
 - [pdc-small-stage](hmi/pdc-small-stage.md) - CarPlay stays beside the side parking (OPS) popup: small stage, message 108, APS drawer, status line
 
 ## 🚀 Deploy  [x]
-- [install](deploy/install.md) - release contents, M.I.B. installer, manual SSH install, verify, uninstall
+- [install](deploy/install.md) - release contents, M.I.B. installer, manual install (SSH or Telnet), verify, uninstall
 - [supervisor-lifecycle](deploy/supervisor-lifecycle.md) - smartphone_integrator, renderer ownership, USB pre-SETUP recovery
 - [connect](deploy/connect.md) - USB / NCM / Bonjour connect flow + failure root cause
 - [session-lifecycle](deploy/session-lifecycle.md) - session audit: watchdog-hang, USB pre-RTSP class, resilience risks R1-R4
