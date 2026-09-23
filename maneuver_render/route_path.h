@@ -13,13 +13,21 @@
 
 #ifndef CR_ROUTE_PATH_H
 #define CR_ROUTE_PATH_H
+#include "route_progress.h"
+#include "contact_shadow.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Segment types */
 #define RSEG_LINE  0
 #define RSEG_ARC   1
 
 #define RPATH_MAX_SEGS  48
-#define RPATH_MAX_PTS  480
+#define RPATH_MAX_PTS  (CR_ROUTE_PROGRESS_POINTS - 1)
+#define RPATH_ANIMATION_EXTENSION 0.5f
+#define RPATH_ARROW_LENGTH_FACTOR 1.3f
 
 typedef struct {
     int type;
@@ -46,11 +54,18 @@ typedef struct {
     float bulb_radius;       /* target bulb radius when tip_blend > 0 */
 } route_path_t;
 
-#define RMESH_MAX_VERTS 7200
+#define RMESH_MAX_VERTS CR_CONTACT_MAX_SOURCE_VERTS
 
 typedef struct {
     float verts[RMESH_MAX_VERTS * 6];  /* pos(3) + normal(3) */
+    float path_dist[RMESH_MAX_VERTS]; /* distance along the source path; no spatial lookup */
+    float progress_start, progress_end;
+    cr_route_progress_point_t progress_points[CR_ROUTE_PROGRESS_POINTS];
+    int progress_count;
     int vert_count;
+    float contact_verts[CR_CONTACT_MAX_VERTS * 6];
+    int contact_count;
+    float contact_thickness;
     int valid;
 } route_mesh_t;
 
@@ -94,5 +109,9 @@ void rpath_set_elevation(float first, float second);
 
 /* Debug overlay -- draws polyline with active window highlighted. */
 void rpath_draw_debug(const route_path_t *p, float t0, float t1);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CR_ROUTE_PATH_H */

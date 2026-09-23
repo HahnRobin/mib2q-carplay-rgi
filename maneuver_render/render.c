@@ -25,11 +25,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 #include "gl_compat.h"
 #include "render.h"
 #include "protocol.h"
 #include "maneuver.h"
+#include "visible_area.h"
+#include "lane_panel.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -52,14 +55,10 @@
 #define CAM_CTR_Z    0.25f
 #define CAM_FOV_DEG  40.0f
 
-/* Composite ground plane extents (world space) */
-#define ROUTE_Y   0.04f   /* raised height for route layer */
-
 typedef struct {
     float base_color[4];
     float surface[4];  /* ambient floor, diffuse strength, spec strength, spec power */
     float fx[4];       /* fresnel strength, fresnel power, clearcoat strength, clearcoat power */
-    float grain[2];    /* grain strength, grain scale */
 } material_preset_t;
 
 typedef struct {
@@ -142,16 +141,47 @@ static void mat4_lookAt(float *m,
 /* ================================================================
  * Shader program -- 3D with directional lighting
  *
- * tex_mode values:
- *   0.0 = normal 3D geometry (MVP transform + lighting)
- *   1.0 = fullscreen blit (clip-space passthrough, sample texture)
- *   2.0 = lit 3D blit (MVP transform + lighting, sample mask texture)
- *   3.0 = flat mask (MVP transform, flat color, no lighting)
+ * Three pass families replace the former all-in-one mode switch:
+ *   lit: 3D route geometry and the textured road FBO;
+ *   flat: masks, overlay, arrival sprite and final framebuffer blit;
+ *   shadow: route cast shadow and lower-face contact AO.
  * ================================================================ */
 
 static GLuint g_program = 0;
+static GLuint g_flat_program = 0, g_shadow_program = 0;
+enum { PASS_LIT = 0, PASS_FLAT = 1, PASS_SHADOW = 2 };
+static int g_active_pass = PASS_LIT;
+static GLint g_flat_attr_pos = -1, g_flat_attr_uv = -1;
+static GLint g_flat_mvp = -1, g_flat_zbias = -1, g_flat_mode = -1;
+static GLint g_flat_color = -1, g_flat_tex = -1, g_flat_alpha = -1, g_flat_entry_fade = -1;
+static float g_flat_entry_value[4];
+static GLint g_shadow_attr_pos = -1, g_shadow_attr_norm = -1;
+static GLint g_shadow_mvp = -1, g_shadow_zbias = -1, g_shadow_mode = -1;
+static GLint g_shadow_mask_scale = -1, g_shadow_light = -1, g_shadow_tex = -1;
+static GLint g_shadow_alpha = -1, g_shadow_opacity = -1, g_shadow_thickness = -1;
+static float g_light_vector[3] = { 0.0f, 1.0f, 0.0f };
+static GLuint g_cutout_program = 0;
+static GLint g_cutout_attr = -1, g_cutout_size = -1;
+static GLint g_cutout_rect = -1, g_cutout_feather = -1, g_cutout_opacity = -1;
 static GLint  g_attr_pos   = -1;
 static GLint  g_attr_norm  = -1;
+static GLint g_attr_progress=-1, g_uni_progress=-1;
+void render_set_mask_direction_fade(float x,float y,float dx,float dy,float span) {
+    g_flat_entry_value[0]=dx;
+    g_flat_entry_value[1]=dy;
+    g_flat_entry_value[2]=-(x*dx+y*dy);
+    g_flat_entry_value[3]=span>1e-6f?1.0f/span:0.0f;
+    if(g_active_pass==PASS_FLAT)
+        glUniform4fv(g_flat_entry_fade,1,g_flat_entry_value);
+}
+void render_set_mask_entry_fade(float start,float span) {
+    render_set_mask_direction_fade(0,start,0,1,span);
+}
+static float g_progress_fill=0, g_progress_path_weight=0, g_progress_glow=0;
+void render_set_route_progress(float fill, float path_weight, float glow) {
+    g_progress_fill=cr_route_progress_front(fill);
+    g_progress_path_weight=path_weight; g_progress_glow=glow;
+}
 static GLint  g_uni_color  = -1;
 static GLint  g_uni_mvp    = -1;
 static GLint  g_uni_light  = -1;
@@ -164,10 +194,8 @@ static GLint  g_uni_zbias  = -1;
 static GLint  g_uni_eye    = -1;
 static GLint  g_uni_mat_surface = -1;
 static GLint  g_uni_mat_fx = -1;
-static GLint  g_uni_grain  = -1;
 static GLint  g_uni_tex_mode = -1;
 static GLint  g_uni_tex      = -1;
-static GLint  g_uni_resolution = -1;
 static GLint  g_uni_mask_scale = -1;  /* vec2: 1/(2*hw), 1/(2*hh) for mask UV */
 static GLint  g_uni_global_alpha = -1;
 static float  g_global_alpha = 1.0f;
@@ -183,7 +211,6 @@ static float g_z_bias = 0.0f;
 
 /* Mask cache dirty flag */
 static int g_masks_dirty = 1;
-static int g_mask_append = 0;  /* 1 = don't clear FBO on begin_mask (additive) */
 
 /* Camera pan offset (maneuver space) -- shifts entire scene to follow arrow */
 static float g_cam_pan_x = 0.0f;
@@ -194,6 +221,28 @@ static render_material_t g_active_material = RENDER_MAT_GENERIC_SOLID;
 
 /* Stored MVPs for composite pass */
 static float g_mvp_current[16];    /* perspective-blended MVP (for 3D composite) */
+static cr_rect_animation_t g_visible_area = {
+    {CR_POPUP_X, CR_POPUP_Y, CR_POPUP_W, CR_POPUP_H},
+    {CR_POPUP_X, CR_POPUP_Y, CR_POPUP_W, CR_POPUP_H},
+    {CR_POPUP_X, CR_POPUP_Y, CR_POPUP_W, CR_POPUP_H}, 0, 0};
+static cr_rect_animation_t g_content_offset;
+
+const cr_route_progress_map_t *render_prepare_route_progress(const cr_route_progress_point_t *points, int count) {
+    static cr_route_progress_map_t projected;
+    if(g_progress_path_weight<=0) return NULL;
+    cr_rect_t visible=g_visible_area.current;
+    /* The row erases the entry below its top edge. Keep the progress origin
+     * at the visible arrow, interpolating with the same camera presentation. */
+    visible.h=fmaxf(1,visible.h-g_content_offset.current.h);
+    return cr_route_progress_project(&projected,points,count,g_mvp_current,visible)
+        ? &projected : NULL;
+}
+
+static double viewport_now(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC,&t);
+    return (double)t.tv_sec+(double)t.tv_nsec/1000000000.0;
+}
 static float g_mvp_ortho_2d[16];   /* pure orthographic for mask rendering */
 
 /* ================================================================
@@ -201,10 +250,6 @@ static float g_mvp_ortho_2d[16];   /* pure orthographic for mask rendering */
  * ================================================================ */
 
 enum { FBO_ROAD = 0, FBO_ROUTE = 1, FBO_COUNT = 2 };
-/* Legacy aliases for API compatibility */
-#define FBO_OUTLINE FBO_ROAD
-#define FBO_FILL    FBO_ROAD
-
 static GLuint g_fbos[FBO_COUNT];
 static GLuint g_fbo_texs[FBO_COUNT];
 static GLuint g_fbo_depths[FBO_COUNT];
@@ -239,26 +284,17 @@ static const material_preset_t k_material_presets[RENDER_MAT_COUNT] = {
     [RENDER_MAT_GENERIC_SOLID] = {
         { 1.0f, 1.0f, 1.0f, 1.0f },
         { 0.20f, 0.56f, 0.06f, 10.0f },
-        { 0.02f, 3.5f, 0.0f, 1.0f },
-        { 0.0f, 0.0f }
+        { 0.02f, 3.5f, 0.0f, 1.0f }
     },
     [RENDER_MAT_ROAD_ASPHALT] = {
         { 0.20f, 0.21f, 0.24f, 1.0f },       /* darker, slightly blue-tinted asphalt */
         { 0.18f, 0.52f, 0.14f, 12.0f },       /* tighter spec, more diffuse response */
-        { 0.05f, 4.0f, 0.02f, 28.0f },        /* subtle clearcoat (wet look) */
-        { 0.40f, 72.0f }                       /* moderate grain, fine scale */
-    },
-    [RENDER_MAT_ROAD_BORDER_PAINT] = {
-        { 0.90f, 0.91f, 0.93f, 1.0f },        /* brighter white paint */
-        { 0.24f, 0.48f, 0.22f, 24.0f },       /* more specular, tighter lobe */
-        { 0.06f, 3.5f, 0.04f, 48.0f },        /* more clearcoat (glass beads) */
-        { 0.12f, 96.0f }                       /* stronger grain texture */
+        { 0.05f, 4.0f, 0.02f, 28.0f }         /* subtle clearcoat (wet look) */
     },
     [RENDER_MAT_ROUTE_ACTIVE] = {
-        { 0.35f, 0.67f, 0.90f, 1.0f },   /* soft blue, matches bargraph */
+        { 0.35f, 0.67f, 0.90f, 1.0f },   /* soft blue route material */
         { 0.10f, 0.68f, 0.50f,  6.0f },   /* broad spec lobe (power 6 — visible at N·H=0.82) */
-        { 0.22f, 3.0f, 0.40f, 12.0f },    /* clearcoat candy gloss (power 12, wide enough for camera angle) */
-        { 0.0f, 0.0f }
+        { 0.22f, 3.0f, 0.40f, 12.0f }     /* clearcoat candy gloss (power 12, wide enough for camera angle) */
     }
 };
 
@@ -274,24 +310,27 @@ static const lighting_state_t k_lighting_state = {
 static const char *k_vert_src =
     "attribute vec3 a_pos;\n"
     "attribute vec3 a_normal;\n"
+    "attribute float a_progress;\n"
     "uniform mat4 u_mvp;\n"
     "uniform float u_z_bias;\n"
-    "uniform float u_tex_mode;\n"
     "varying vec3 v_normal;\n"
     "varying vec3 v_world_pos;\n"
+    "varying float v_progress;\n"
+    "varying float v_progress_w;\n"
     "void main() {\n"
-    "  if (u_tex_mode > 0.5 && u_tex_mode < 1.5) {\n"
-    "    gl_Position = vec4(a_pos.xy, 0.0, 1.0);\n"
-    "  } else {\n"
-    "    gl_Position = u_mvp * vec4(a_pos, 1.0);\n"
-    "    gl_Position.z -= u_z_bias;\n"
-    "  }\n"
+    "  gl_Position = u_mvp * vec4(a_pos, 1.0);\n"
+    "  gl_Position.z -= u_z_bias;\n"
     "  v_normal = a_normal;\n"
+    /* GLES2 has no noperspective qualifier. Cancel perspective interpolation
+     * so equal projected lengths stay equal inside long shaft triangles too. */
+    "  v_progress = a_progress * gl_Position.w;\n"
+    "  v_progress_w = gl_Position.w;\n"
     "  v_world_pos = a_pos;\n"
     "}\n";
 
 static const char *k_frag_src_body =
     "uniform vec4 u_color;\n"
+    "uniform vec4 u_progress;\n"
     "uniform vec3 u_light_dir;\n"
     "uniform vec3 u_light_key_color;\n"
     "uniform vec3 u_light_fill_color;\n"
@@ -301,15 +340,32 @@ static const char *k_frag_src_body =
     "uniform vec3 u_eye;\n"
     "uniform vec4 u_mat_surface;\n"
     "uniform vec4 u_mat_fx;\n"
-    "uniform vec2 u_grain;\n"
     "uniform float u_tex_mode;\n"
     "uniform sampler2D u_tex;\n"
-    "uniform vec2 u_resolution;\n"
     "uniform vec2 u_mask_scale;\n"
     "uniform float u_global_alpha;\n"
     "varying vec3 v_normal;\n"
     "varying vec3 v_world_pos;\n"
+    "varying float v_progress;\n"
+    "varying float v_progress_w;\n"
     "vec4 shade_surface(vec4 base, float alpha) {\n"
+    /* Applied to the actual route mesh only. Keep normal lighting, depth,
+     * shadows and alpha; crossings carry their own arc-length coordinates. */
+    "  if (u_progress.w > 0.0) {\n"
+    /* Bright white resting arrow; compensate for the existing cool lighting.
+     * Keep the established HUD-blue fill/blink endpoint unchanged. */
+    "    vec3 quiet = vec3(1.000000, 0.980392, 0.909804);\n"
+    "    vec3 ice = vec3(0.32, 0.77, 1.0);\n"
+    "    float f = u_progress.x;\n"
+    "    float filled = 0.0;\n"
+    "    if (u_progress.y > 0.0) {\n"
+    "      filled = 1.0 - smoothstep(f-0.055, f+0.055, v_progress/v_progress_w);\n"
+    "      if (f <= -0.055) filled = 0.0;\n"
+    "      else if (f >= 1.055) filled = 1.0;\n"
+    "    }\n"
+    "    vec3 tint = mix(quiet,ice,filled*u_progress.y+u_progress.z);\n"
+    "    base.rgb = mix(base.rgb,tint,u_progress.w);\n"
+    "  }\n"
     "  vec3 N = normalize(v_normal);\n"
     "  vec3 L = normalize(u_light_dir);\n"
     "  vec3 fill_dir = normalize(vec3(-L.x * 0.55, 0.45, -L.z * 0.55));\n"
@@ -337,11 +393,6 @@ static const char *k_frag_src_body =
     "  vec3 color = paint * diffuse_light;\n"
     /* specular + clearcoat */
     "  color += spec_tint * (spec + clearcoat);\n"
-    /* retroreflective glass-bead effect for road paint (high grain_scale materials) */
-    "  if (u_grain.y > 80.0) {\n"
-    "    float retro = pow(max(dot(V, L), 0.0), 4.0) * 0.22;\n"
-    "    color += base.rgb * retro;\n"
-    "  }\n"
     /* fresnel rim */
     "  color += paint * (u_mat_fx.x * fres * 0.70);\n"
     /* environment reflection (gradient with red taillight ambience below horizon) */
@@ -368,35 +419,6 @@ static const char *k_frag_src_body =
     "  return vec4(color, alpha * base.a);\n"
     "}\n"
     "void main() {\n"
-    /* tex_mode 1: fullscreen blit -- passthrough texture sample */
-    "  if (u_tex_mode > 0.5 && u_tex_mode < 1.5) {\n"
-    "    vec2 uv = v_world_pos.xy * 0.5 + 0.5;\n"
-    "    gl_FragColor = texture2D(u_tex, uv);\n"
-    "    return;\n"
-    "  }\n"
-    /* tex_mode 4: sprite blit -- UVs piggybacked on normal attribute */
-    "  if (u_tex_mode > 3.5 && u_tex_mode < 4.5) {\n"
-    "    vec2 uv = v_normal.xy;\n"
-    "    gl_FragColor = texture2D(u_tex, uv);\n"
-    "    gl_FragColor.a *= u_global_alpha;\n"
-    "    return;\n"
-    "  }\n"
-    /* tex_mode 3: flat mask -- flat color, no lighting */
-    "  if (u_tex_mode > 2.5 && u_tex_mode < 3.5) {\n"
-    "    gl_FragColor = u_color;\n"
-    "    return;\n"
-    "  }\n"
-    /* tex_mode 2: lit 3D blit -- sample mask texture, apply lighting. */
-    "  if (u_tex_mode > 1.5 && u_tex_mode < 2.5) {\n"
-    "    vec2 uv = vec2(v_world_pos.x * u_mask_scale.x + 0.5,\n"
-    "                    v_world_pos.z * u_mask_scale.y + 0.5);\n"
-    "    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;\n"
-    "    vec4 mask = texture2D(u_tex, uv);\n"
-    "    if (mask.a < 0.01) discard;\n"
-    "    gl_FragColor = shade_surface(u_color, mask.a);\n"
-    "    gl_FragColor.a *= u_global_alpha;\n"
-    "    return;\n"
-    "  }\n"
     /* tex_mode 7: lit 3D blit with FBO color as base (painter's algorithm road FBO). */
     "  if (u_tex_mode > 6.5 && u_tex_mode < 7.5) {\n"
     "    vec2 uv = vec2(v_world_pos.x * u_mask_scale.x + 0.5,\n"
@@ -408,21 +430,85 @@ static const char *k_frag_src_body =
     "    gl_FragColor.a *= u_global_alpha;\n"
     "    return;\n"
     "  }\n"
-    /* tex_mode 9: route shadow (mask offset + darken) */
-    "  if (u_tex_mode > 8.5 && u_tex_mode < 9.5) {\n"
-    "    vec2 uv = vec2(v_world_pos.x * u_mask_scale.x + 0.5,\n"
-    "                    v_world_pos.z * u_mask_scale.y + 0.5);\n"
-    "    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;\n"
-    "    vec2 shoff = vec2(u_light_dir.x, u_light_dir.z) * 0.02;\n"
-    "    vec4 rmask = texture2D(u_tex, uv - shoff);\n"
-    "    if (rmask.a < 0.01) discard;\n"
-    "    float sa = smoothstep(0.0, 0.4, rmask.a) * 0.38;\n"
-    "    gl_FragColor = vec4(0.0, 0.0, 0.0, sa * u_global_alpha);\n"
-    "    return;\n"
-    "  }\n"
     /* tex_mode 0: normal 3D geometry with lighting */
     "  gl_FragColor = shade_surface(u_color, 1.0);\n"
     "  gl_FragColor.a *= u_global_alpha;\n"
+    "}\n";
+
+/* Mask/overlay, sprite and final blit share only texture/flat-color operations.
+ * None of these pixels needs the lighting, progress or material shader. */
+static const char *k_flat_vert_src =
+    "attribute vec3 a_pos;\n"
+    "attribute vec3 a_normal;\n"
+    "uniform mat4 u_mvp;\n"
+    "uniform float u_z_bias;\n"
+    "uniform float u_mode;\n"
+    "varying vec3 v_world_pos;\n"
+    "varying vec2 v_uv;\n"
+    "void main() {\n"
+    "  if (u_mode > 0.5 && u_mode < 1.5) gl_Position=vec4(a_pos.xy,0.0,1.0);\n"
+    "  else { gl_Position=u_mvp*vec4(a_pos,1.0); gl_Position.z-=u_z_bias; }\n"
+    "  v_world_pos=a_pos;\n"
+    "  v_uv=a_normal.xy;\n"
+    "}\n";
+static const char *k_flat_frag_body =
+    "uniform float u_mode;\n"
+    "uniform vec4 u_color;\n"
+    "uniform vec4 u_entry_fade;\n"
+    "uniform float u_global_alpha;\n"
+    "uniform sampler2D u_tex;\n"
+    "varying vec3 v_world_pos;\n"
+    "varying vec2 v_uv;\n"
+    "void main() {\n"
+    "  if (u_mode > 0.5 && u_mode < 1.5) {\n"
+    "    gl_FragColor=texture2D(u_tex,v_world_pos.xy*0.5+0.5); return;\n"
+    "  }\n"
+    "  if (u_mode > 3.5 && u_mode < 4.5) {\n"
+    "    gl_FragColor=texture2D(u_tex,v_uv);\n"
+    "    gl_FragColor.a*=u_global_alpha; return;\n"
+    "  }\n"
+    "  gl_FragColor=u_color;\n"
+    "  if (u_entry_fade.w > 0.0)\n"
+    "    gl_FragColor.a*=smoothstep(0.0,1.0,(dot(v_world_pos.xz,u_entry_fade.xy)+u_entry_fade.z)*u_entry_fade.w);\n"
+    "}\n";
+
+/* Shadow pixels are multiplicative and never call the lit material function. */
+static const char *k_shadow_vert_src =
+    "attribute vec3 a_pos;\n"
+    "attribute vec3 a_normal;\n"
+    "uniform mat4 u_mvp;\n"
+    "uniform float u_z_bias;\n"
+    "varying vec3 v_world_pos;\n"
+    "varying vec3 v_normal;\n"
+    "void main() {\n"
+    "  gl_Position=u_mvp*vec4(a_pos,1.0); gl_Position.z-=u_z_bias;\n"
+    "  v_world_pos=a_pos; v_normal=a_normal;\n"
+    "}\n";
+static const char *k_shadow_frag_body =
+    "uniform float u_mode;\n"
+    "uniform vec2 u_mask_scale;\n"
+    "uniform vec3 u_light_dir;\n"
+    "uniform float u_global_alpha;\n"
+    "uniform float u_opacity;\n"
+    "uniform float u_contact_thickness;\n"
+    "uniform sampler2D u_tex;\n"
+    "varying vec3 v_world_pos;\n"
+    "varying vec3 v_normal;\n"
+    "void main() {\n"
+    "  if (u_mode > 8.5 && u_mode < 9.5) {\n"
+    "    vec2 uv=vec2(v_world_pos.x*u_mask_scale.x+0.5,v_world_pos.z*u_mask_scale.y+0.5);\n"
+    "    if (uv.x<0.0 || uv.x>1.0 || uv.y<0.0 || uv.y>1.0) discard;\n"
+    "    vec2 shoff=vec2(u_light_dir.x,u_light_dir.z)*0.02;\n"
+    "    vec4 rmask=texture2D(u_tex,uv-shoff);\n"
+    "    if (rmask.a<0.01) discard;\n"
+    "    float sa=smoothstep(0.0,0.4,rmask.a)*0.38;\n"
+    "    gl_FragColor=vec4(0.0,0.0,0.0,sa*u_global_alpha); return;\n"
+    "  }\n"
+    "  float width=max(0.001,v_normal.z);\n"
+    "  float edge=1.0-smoothstep(0.0,1.0,abs(v_normal.x)/width);\n"
+    "  float gap=1.0-smoothstep(0.06,0.14,max(0.0,v_normal.y-u_contact_thickness));\n"
+    "  float onset=smoothstep(0.0,0.15,v_normal.z);\n"
+    "  gl_FragColor=vec4(0.0,0.0,0.0,0.42*edge*gap*onset*u_opacity*u_global_alpha);\n"
     "}\n";
 
 /* ================================================================
@@ -431,16 +517,26 @@ static const char *k_frag_src_body =
 
 #define MAX_VERTS 1200
 static float g_vbuf[MAX_VERTS * 6];
+static float g_vprogress[MAX_VERTS];
+static int g_route_batch=0;
 static int g_vcount;
 
-void vb_reset(void) { g_vcount = 0; }
+void vb_reset(void) { g_vcount = 0; g_route_batch=0; }
 
 void vb_v(float x, float y, float z, float nx, float ny, float nz) {
     if (g_vcount >= MAX_VERTS) return;
     int i = g_vcount * 6;
     g_vbuf[i] = x; g_vbuf[i+1] = y; g_vbuf[i+2] = z;
     g_vbuf[i+3] = nx; g_vbuf[i+4] = ny; g_vbuf[i+5] = nz;
+    g_vprogress[g_vcount]=0;
     g_vcount++;
+}
+
+void vb_route_v(float x,float y,float z,float nx,float ny,float nz,float progress) {
+    if(g_vcount>=MAX_VERTS) return;
+    vb_v(x,y,z,nx,ny,nz);
+    g_vprogress[g_vcount-1]=progress;
+    g_route_batch=1;
 }
 
 /* Push a quad as 2 triangles with flat normal */
@@ -468,13 +564,51 @@ static void apply_material(const material_preset_t *preset,
     glUniform4f(g_uni_mat_fx,
                 preset->fx[0], preset->fx[1],
                 preset->fx[2], preset->fx[3]);
-    glUniform2f(g_uni_grain, preset->grain[0], preset->grain[1]);
+}
+
+static void use_lit_program(void) {
+    glUseProgram(g_program);
+    g_active_pass=PASS_LIT;
+    glUniform1f(g_uni_tex_mode,0.0f);
+    glUniform1f(g_uni_global_alpha,g_global_alpha);
+    glUniform4f(g_uni_progress,0,0,0,0);
+}
+
+static void use_flat_program(float mode) {
+    glUseProgram(g_flat_program);
+    g_active_pass=PASS_FLAT;
+    glUniform1f(g_flat_mode,mode);
+    glUniform1f(g_flat_alpha,g_global_alpha);
+    glUniform4fv(g_flat_entry_fade,1,g_flat_entry_value);
+    glUniform1i(g_flat_tex,0);
+}
+
+static void use_shadow_program(float mode) {
+    glUseProgram(g_shadow_program);
+    g_active_pass=PASS_SHADOW;
+    glUniform1f(g_shadow_mode,mode);
+    glUniform1f(g_shadow_alpha,g_global_alpha);
+    glUniformMatrix4fv(g_shadow_mvp,1,GL_FALSE,g_mvp_current);
+    glUniform2f(g_shadow_mask_scale,0.5f/g_mask_half_w,0.5f/g_mask_half_h);
+    glUniform3fv(g_shadow_light,1,g_light_vector);
+    glUniform1i(g_shadow_tex,0);
 }
 
 void vb_flush(float r, float g, float b, float a) {
     const material_preset_t *preset;
 
     if (g_vcount == 0) return;
+    if (g_active_pass==PASS_FLAT) {
+        glUniform4f(g_flat_color,r,g,b,a);
+        glUniform1f(g_flat_zbias,g_z_bias);
+        g_z_bias+=Z_BIAS_STEP;
+        glVertexAttribPointer(g_flat_attr_pos,3,GL_FLOAT,GL_FALSE,24,g_vbuf);
+        glVertexAttribPointer(g_flat_attr_uv,3,GL_FLOAT,GL_FALSE,24,g_vbuf+3);
+        glEnableVertexAttribArray(g_flat_attr_pos);
+        glEnableVertexAttribArray(g_flat_attr_uv);
+        glDrawArrays(GL_TRIANGLES,0,g_vcount);
+        return;
+    }
     preset = material_preset(g_active_material);
     apply_material(preset, r, g, b, a);
     glUniform1f(g_uni_zbias, g_z_bias);
@@ -484,7 +618,41 @@ void vb_flush(float r, float g, float b, float a) {
     glVertexAttribPointer(g_attr_norm, 3, GL_FLOAT, GL_FALSE, 24, g_vbuf + 3);
     glEnableVertexAttribArray(g_attr_pos);
     glEnableVertexAttribArray(g_attr_norm);
+    glUniform4f(g_uni_progress,g_progress_fill,g_progress_path_weight,g_progress_glow,
+                g_route_batch ? 1.0f : 0.0f);
+    if(g_route_batch) {
+        glVertexAttribPointer(g_attr_progress,1,GL_FLOAT,GL_FALSE,0,g_vprogress);
+        glEnableVertexAttribArray(g_attr_progress);
+    }
     glDrawArrays(GL_TRIANGLES, 0, g_vcount);
+    glDisableVertexAttribArray(g_attr_progress);
+    glVertexAttrib1f(g_attr_progress,0);
+    /* Direct mask/sprite/composite draws bypass vb_flush. */
+    glUniform4f(g_uni_progress,0,0,0,0);
+}
+
+/* Multiplicative contact AO preserves framebuffer alpha and only darkens the
+ * lower mesh surfaces. Depth testing keeps the upper arrow clean. */
+void render_contact_shadow(const float *verts,int count,float alpha,float thickness) {
+    int drawn=0;
+    if(count<=0 || alpha<=0)return;
+    use_shadow_program(10.0f);
+    glUniform1f(g_shadow_thickness,thickness);
+    glUniform1f(g_shadow_opacity,alpha);
+    glUniform1f(g_shadow_zbias,g_z_bias);
+    glDepthMask(GL_FALSE);
+    glBlendFuncSeparate(GL_ZERO,GL_ONE_MINUS_SRC_ALPHA,GL_ZERO,GL_ONE);
+    while(drawn<count) {
+        int batch=count-drawn;
+        if(batch>MAX_VERTS)batch=MAX_VERTS;
+        glVertexAttribPointer(g_shadow_attr_pos,3,GL_FLOAT,GL_FALSE,24,verts+drawn*6);
+        glVertexAttribPointer(g_shadow_attr_norm,3,GL_FLOAT,GL_FALSE,24,verts+drawn*6+3);
+        glDrawArrays(GL_TRIANGLES,0,batch);
+        drawn+=batch;
+    }
+    glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_TRUE);
+    use_lit_program();
 }
 
 /* ================================================================
@@ -526,6 +694,10 @@ static int build_program(void) {
     g_program = glCreateProgram();
     glAttachShader(g_program, vs);
     glAttachShader(g_program, fs);
+    /* GL 2.1 requires array 0 to remain the position stream. */
+    glBindAttribLocation(g_program,0,"a_pos");
+    glBindAttribLocation(g_program,1,"a_normal");
+    glBindAttribLocation(g_program,2,"a_progress");
     glLinkProgram(g_program);
 
     GLint ok = 0;
@@ -545,6 +717,8 @@ static int build_program(void) {
 
     g_attr_pos  = glGetAttribLocation(g_program, "a_pos");
     g_attr_norm = glGetAttribLocation(g_program, "a_normal");
+    g_attr_progress=glGetAttribLocation(g_program,"a_progress");
+    g_uni_progress=glGetUniformLocation(g_program,"u_progress");
     g_uni_color = glGetUniformLocation(g_program, "u_color");
     g_uni_mvp   = glGetUniformLocation(g_program, "u_mvp");
     g_uni_light = glGetUniformLocation(g_program, "u_light_dir");
@@ -557,15 +731,122 @@ static int build_program(void) {
     g_uni_eye   = glGetUniformLocation(g_program, "u_eye");
     g_uni_mat_surface = glGetUniformLocation(g_program, "u_mat_surface");
     g_uni_mat_fx = glGetUniformLocation(g_program, "u_mat_fx");
-    g_uni_grain = glGetUniformLocation(g_program, "u_grain");
     g_uni_tex_mode = glGetUniformLocation(g_program, "u_tex_mode");
     g_uni_tex      = glGetUniformLocation(g_program, "u_tex");
-    g_uni_resolution = glGetUniformLocation(g_program, "u_resolution");
     g_uni_mask_scale = glGetUniformLocation(g_program, "u_mask_scale");
     g_uni_global_alpha = glGetUniformLocation(g_program, "u_global_alpha");
 
     glDeleteShader(vs);
     glDeleteShader(fs);
+    return 0;
+}
+
+static GLuint build_pass_program(const char *name,const char *vertex_body,
+                                 const char *fragment_body) {
+    char vertex[4096],fragment[8192];
+    GLuint vs,fs,program;
+    GLint ok;
+    snprintf(vertex,sizeof(vertex),"%s%s%s",SHADER_HEADER,SHADER_PRECISION,vertex_body);
+    snprintf(fragment,sizeof(fragment),"%s%s%s",SHADER_HEADER,SHADER_PRECISION,fragment_body);
+    vs=compile_shader(GL_VERTEX_SHADER,vertex);
+    fs=compile_shader(GL_FRAGMENT_SHADER,fragment);
+    if(!vs || !fs) {
+        if(vs)glDeleteShader(vs);
+        if(fs)glDeleteShader(fs);
+        return 0;
+    }
+    program=glCreateProgram();
+    if(!program) {glDeleteShader(vs);glDeleteShader(fs);return 0;}
+    glAttachShader(program,vs);
+    glAttachShader(program,fs);
+    glBindAttribLocation(program,0,"a_pos");
+    glBindAttribLocation(program,1,"a_normal");
+    glLinkProgram(program);
+    glGetProgramiv(program,GL_LINK_STATUS,&ok);
+    if(!ok) {
+        char log[512];
+        glGetProgramInfoLog(program,sizeof(log),NULL,log);
+        fprintf(stderr,"render: %s pass link error: %s\n",name,log);
+        glDeleteProgram(program);program=0;
+    }
+    glDeleteShader(vs);glDeleteShader(fs);
+    return program;
+}
+
+static int build_flat_program(void) {
+    g_flat_program=build_pass_program("flat",k_flat_vert_src,k_flat_frag_body);
+    if(!g_flat_program)return -1;
+    g_flat_attr_pos=glGetAttribLocation(g_flat_program,"a_pos");
+    g_flat_attr_uv=glGetAttribLocation(g_flat_program,"a_normal");
+    g_flat_mvp=glGetUniformLocation(g_flat_program,"u_mvp");
+    g_flat_zbias=glGetUniformLocation(g_flat_program,"u_z_bias");
+    g_flat_mode=glGetUniformLocation(g_flat_program,"u_mode");
+    g_flat_color=glGetUniformLocation(g_flat_program,"u_color");
+    g_flat_tex=glGetUniformLocation(g_flat_program,"u_tex");
+    g_flat_alpha=glGetUniformLocation(g_flat_program,"u_global_alpha");
+    g_flat_entry_fade=glGetUniformLocation(g_flat_program,"u_entry_fade");
+    if(g_flat_attr_pos<0 || g_flat_attr_uv<0 || g_flat_mvp<0 ||
+       g_flat_zbias<0 || g_flat_mode<0 || g_flat_color<0 ||
+       g_flat_tex<0 || g_flat_alpha<0 || g_flat_entry_fade<0)return -1;
+    return 0;
+}
+
+static int build_shadow_program(void) {
+    g_shadow_program=build_pass_program("shadow",k_shadow_vert_src,k_shadow_frag_body);
+    if(!g_shadow_program)return -1;
+    g_shadow_attr_pos=glGetAttribLocation(g_shadow_program,"a_pos");
+    g_shadow_attr_norm=glGetAttribLocation(g_shadow_program,"a_normal");
+    g_shadow_mvp=glGetUniformLocation(g_shadow_program,"u_mvp");
+    g_shadow_zbias=glGetUniformLocation(g_shadow_program,"u_z_bias");
+    g_shadow_mode=glGetUniformLocation(g_shadow_program,"u_mode");
+    g_shadow_mask_scale=glGetUniformLocation(g_shadow_program,"u_mask_scale");
+    g_shadow_light=glGetUniformLocation(g_shadow_program,"u_light_dir");
+    g_shadow_tex=glGetUniformLocation(g_shadow_program,"u_tex");
+    g_shadow_alpha=glGetUniformLocation(g_shadow_program,"u_global_alpha");
+    g_shadow_opacity=glGetUniformLocation(g_shadow_program,"u_opacity");
+    g_shadow_thickness=glGetUniformLocation(g_shadow_program,"u_contact_thickness");
+    if(g_shadow_attr_pos<0 || g_shadow_attr_norm<0 || g_shadow_mvp<0 ||
+       g_shadow_zbias<0 || g_shadow_mode<0 || g_shadow_mask_scale<0 ||
+       g_shadow_light<0 || g_shadow_tex<0 || g_shadow_alpha<0 ||
+       g_shadow_opacity<0 || g_shadow_thickness<0)return -1;
+    return 0;
+}
+
+/* Lane erasure is a small screen-space program, isolated from the many 3D
+ * lighting/progress branches in the road shader.  It keeps the same feather
+ * and destination-alpha blend while avoiding that shader for the panel pass. */
+static int build_cutout_program(void) {
+    static const char *vertex_body =
+        "attribute vec2 a_pos;\n"
+        "uniform vec2 u_size;\n"
+        "varying vec2 v_source;\n"
+        "void main() {\n"
+        "  v_source=a_pos;\n"
+        "  gl_Position=vec4(2.0*a_pos.x/u_size.x-1.0,1.0-2.0*a_pos.y/u_size.y,0.0,1.0);\n"
+        "}\n";
+    static const char *fragment_body =
+        "uniform vec4 u_rect;\n"
+        "uniform vec2 u_feather;\n"
+        "uniform float u_opacity;\n"
+        "varying vec2 v_source;\n"
+        "void main() {\n"
+        "  float a=smoothstep(u_rect.x-u_feather.x,u_rect.x,v_source.x);\n"
+        "  a*=1.0-smoothstep(u_rect.z,u_rect.z+u_feather.x,v_source.x);\n"
+        "  a*=smoothstep(u_rect.y-u_feather.y,u_rect.y,v_source.y);\n"
+        "  gl_FragColor=vec4(0.0,0.0,0.0,a*u_opacity);\n"
+        "}\n";
+    g_cutout_program=build_pass_program("cutout",vertex_body,fragment_body);
+    if(!g_cutout_program)return -1;
+    g_cutout_attr=glGetAttribLocation(g_cutout_program,"a_pos");
+    g_cutout_size=glGetUniformLocation(g_cutout_program,"u_size");
+    g_cutout_rect=glGetUniformLocation(g_cutout_program,"u_rect");
+    g_cutout_feather=glGetUniformLocation(g_cutout_program,"u_feather");
+    g_cutout_opacity=glGetUniformLocation(g_cutout_program,"u_opacity");
+    if(g_cutout_attr<0 || g_cutout_size<0 || g_cutout_rect<0 ||
+       g_cutout_feather<0 || g_cutout_opacity<0) {
+        glDeleteProgram(g_cutout_program);g_cutout_program=0;
+        return -1;
+    }
     return 0;
 }
 
@@ -616,19 +897,20 @@ static const char *k_fxaa_frag =
     "  float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);\n"
     "  dir = clamp(dir * rcpDirMin, vec2(-8.0), vec2(8.0)) * u_rcp;\n"
     "\n"
-    "  vec3 rgbA = 0.5 * (\n"
-    "    texture2D(u_tex, v_uv + dir * (1.0/3.0 - 0.5)).rgb +\n"
-    "    texture2D(u_tex, v_uv + dir * (2.0/3.0 - 0.5)).rgb);\n"
-    "  vec3 rgbB = rgbA * 0.5 + 0.25 * (\n"
-    "    texture2D(u_tex, v_uv + dir * -0.5).rgb +\n"
-    "    texture2D(u_tex, v_uv + dir *  0.5).rgb);\n"
-    "  float lumB = dot(rgbB, luma);\n"
+    /* Filter associated RGBA together. Keeping the center alpha while
+     * averaging neighboring RGB can create color in transparent pixels. */
+    "  vec4 rgbaA = 0.5 * (\n"
+    "    texture2D(u_tex, v_uv + dir * (1.0/3.0 - 0.5)) +\n"
+    "    texture2D(u_tex, v_uv + dir * (2.0/3.0 - 0.5)));\n"
+    "  vec4 rgbaB = rgbaA * 0.5 + 0.25 * (\n"
+    "    texture2D(u_tex, v_uv + dir * -0.5) +\n"
+    "    texture2D(u_tex, v_uv + dir *  0.5));\n"
+    "  float lumB = dot(rgbaB.rgb, luma);\n"
     "\n"
-    "  float alphaM = texture2D(u_tex, v_uv).a;\n"
     "  if (lumB < lumMin || lumB > lumMax)\n"
-    "    gl_FragColor = vec4(rgbA, alphaM);\n"
+    "    gl_FragColor = rgbaA;\n"
     "  else\n"
-    "    gl_FragColor = vec4(rgbB, alphaM);\n"
+    "    gl_FragColor = rgbaB;\n"
     "}\n";
 
 static int build_fxaa_program(void) {
@@ -755,11 +1037,6 @@ static void fbo_bind(int idx) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
-static void fbo_bind_noclear(int idx) {
-    glBindFramebuffer(GL_FRAMEBUFFER, g_fbos[idx]);
-    glViewport(0, 0, g_fbo_w, g_fbo_h);
-}
-
 static void fbo_unbind(void) {
     glBindFramebuffer(GL_FRAMEBUFFER, g_ss_fbo);
     glViewport(0, 0, g_fb_w, g_fb_h);
@@ -786,6 +1063,11 @@ static void update_mask_config(int fb_width, int fb_height) {
 
 int render_init(int fb_width, int fb_height) {
     if (build_program() < 0) return -1;
+    if (build_flat_program() < 0 || build_shadow_program() < 0 ||
+        build_cutout_program() < 0) {
+        render_shutdown();
+        return -1;
+    }
 
     g_fb_w = fb_width;
     g_fb_h = fb_height;
@@ -797,7 +1079,7 @@ int render_init(int fb_width, int fb_height) {
     glDisable(GL_DITHER);
     /* MSAA removed — replaced by FXAA post-process for better edge smoothing */
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
     /* Save default framebuffer -- may not be 0 on macOS with MSAA */
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &g_default_fbo);
@@ -858,12 +1140,10 @@ int render_init(int fb_width, int fb_height) {
     fbos_init(g_fb_w, g_fb_h);
 
     /* Init tex_mode off */
-    glUseProgram(g_program);
-    glUniform1f(g_uni_tex_mode, 0.0f);
+    use_lit_program();
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, g_fbo_texs[0]);
     glUniform1i(g_uni_tex, 0);
-    glUniform2f(g_uni_resolution, (float)g_ss_w, (float)g_ss_h);
 
     fprintf(stderr, "render: init multi-layer %dx%d (default fbo=%d)\n",
             fb_width, fb_height, (int)g_default_fbo);
@@ -901,8 +1181,94 @@ void render_set_viewport(int fb_width, int fb_height) {
 
     update_mask_config(g_fb_w, g_fb_h);
     glViewport(0, 0, g_fb_w, g_fb_h);
-    glUniform2f(g_uni_resolution, (float)g_fb_w, (float)g_fb_h);
     fbos_resize(g_fb_w, g_fb_h);
+}
+
+static void build_camera_mvp(float *mvp, float aspect, float pan_x, float pan_z,
+                              float rotation, float ts,float dolly) {
+    float cam_cos = cosf(rotation);
+    float cam_sin = sinf(rotation);
+    float eye_x = pan_x + cam_cos * CAM_EYE_X - cam_sin * CAM_EYE_Z;
+    float eye_z = pan_z + cam_sin * CAM_EYE_X + cam_cos * CAM_EYE_Z;
+    float ctr_x = pan_x + cam_cos * CAM_CTR_X - cam_sin * CAM_CTR_Z;
+    float ctr_z = pan_z + cam_sin * CAM_CTR_X + cam_cos * CAM_CTR_Z;
+    float distance=1+dolly;
+    float eye_y=CAM_EYE_Y;
+    if(dolly!=0) {
+        eye_x=ctr_x+(eye_x-ctr_x)*distance;
+        eye_z=ctr_z+(eye_z-ctr_z)*distance;
+        eye_y=CAM_CTR_Y+(CAM_EYE_Y-CAM_CTR_Y)*distance;
+    }
+
+    /* Compute both MVPs and lerp */
+    float mvp_persp[16], mvp_ortho[16];
+
+    {
+        float proj[16], view[16];
+        float fov_rad = CAM_FOV_DEG * (float)M_PI / 180.0f;
+        mat4_perspective(proj, fov_rad, aspect, 0.1f, 20.0f);
+        mat4_lookAt(view,
+                    eye_x, eye_y, eye_z,
+                    ctr_x, CAM_CTR_Y, ctr_z,
+                    0.0f, 1.0f, 0.0f);
+        mat4_mul(mvp_persp, proj, view);
+    }
+    {
+        float proj[16], view[16];
+        float hh = distance, hw = hh * aspect;
+        mat4_ortho(proj, -hw, hw, -hh, hh, 0.1f, 20.0f);
+        mat4_zero(view);
+        /* Ortho view uses the inverse camera yaw so top-down motion matches
+         * the perspective camera heading instead of orbiting sideways. */
+        view[0]  =  cam_cos;
+        view[1]  = -cam_sin;
+        view[8]  =  cam_sin;
+        view[9]  =  cam_cos;
+        view[12] = -cam_cos * pan_x - cam_sin * pan_z;
+        view[13] =  cam_sin * pan_x - cam_cos * pan_z;
+        view[6]  =  1.0f;
+        view[14] = -5.0f;
+        view[15] =  1.0f;
+        mat4_mul(mvp_ortho, proj, view);
+    }
+
+    /* Blended MVP for 3D composite */
+    {
+        int i;
+        for (i = 0; i < 16; i++)
+            mvp[i] = mvp_ortho[i] + ts * (mvp_persp[i] - mvp_ortho[i]);
+    }
+
+    /* Shift projection to center maneuver in popup crop area.
+     * Full offset in 2D (flat view), reduced in 3D (perspective extends upward).
+     * ts = perspective blend: 0.0=ortho, 1.0=perspective. */
+    {
+        const float content_h = (float)(CR_DEFAULT_HEIGHT - 1);
+        const float popup_cy = CR_POPUP_Y + CR_POPUP_H * 0.5f;     /* 103.5 */
+        const float content_cy = content_h * 0.5f;                   /* 90 */
+        const float full_offset = -(popup_cy - content_cy) / content_cy; /* -0.15 */
+        /* 2D: full offset (centers junction in popup crop).
+         * 3D: half offset (compromise — centers between junction and road top). */
+        /* 2D: full offset (-0.15). 3D: adjustable extra offset. */
+        const float offset_y = full_offset + ts * g_3d_offset_adjust;
+        int c;
+        for (c = 0; c < 4; c++) {
+            mvp[c*4 + 1] += mvp[c*4 + 3] * offset_y;
+        }
+    }
+
+}
+
+void render_get_layout_matrix(float out[16]) {
+    render_build_layout_matrix(out,(float)g_fb_w/g_fb_h);
+}
+
+void render_build_layout_matrix(float out[16],float aspect) {
+    if(out)build_camera_mvp(out,aspect,0,0,0,1,0);
+}
+
+void render_build_framing_matrix(float out[16],float aspect,float dolly) {
+    if(out)build_camera_mvp(out,aspect,0,0,0,1,dolly);
 }
 
 static void sync_camera_uniforms(void) {
@@ -924,51 +1290,22 @@ static void sync_camera_uniforms(void) {
     float t = g_persp_t;
     float ts = t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
 
-    float aspect = (float)g_fb_w / (float)g_fb_h;
-    float cam_cos = cosf(g_cam_rot);
-    float cam_sin = sinf(g_cam_rot);
-    float eye_x = g_cam_pan_x + cam_cos * CAM_EYE_X - cam_sin * CAM_EYE_Z;
-    float eye_z = g_cam_pan_z + cam_sin * CAM_EYE_X + cam_cos * CAM_EYE_Z;
-    float ctr_x = g_cam_pan_x + cam_cos * CAM_CTR_X - cam_sin * CAM_CTR_Z;
-    float ctr_z = g_cam_pan_z + cam_sin * CAM_CTR_X + cam_cos * CAM_CTR_Z;
-
-    /* Compute both MVPs and lerp */
-    float mvp_persp[16], mvp_ortho[16];
-
-    {
-        float proj[16], view[16];
-        float fov_rad = CAM_FOV_DEG * (float)M_PI / 180.0f;
-        mat4_perspective(proj, fov_rad, aspect, 0.1f, 20.0f);
-        mat4_lookAt(view,
-                    eye_x, CAM_EYE_Y, eye_z,
-                    ctr_x, CAM_CTR_Y, ctr_z,
-                    0.0f, 1.0f, 0.0f);
-        mat4_mul(mvp_persp, proj, view);
+    float cam_cos=cosf(g_cam_rot), cam_sin=sinf(g_cam_rot);
+    float eye_x=g_cam_pan_x+cam_cos*CAM_EYE_X-cam_sin*CAM_EYE_Z;
+    float eye_z=g_cam_pan_z+cam_sin*CAM_EYE_X+cam_cos*CAM_EYE_Z;
+    float eye_y=CAM_EYE_Y;
+    if(g_content_offset.current.w!=0) {
+        float distance=1+g_content_offset.current.w;
+        float ctr_x=g_cam_pan_x+cam_cos*CAM_CTR_X-cam_sin*CAM_CTR_Z;
+        float ctr_z=g_cam_pan_z+cam_sin*CAM_CTR_X+cam_cos*CAM_CTR_Z;
+        eye_x=ctr_x+(eye_x-ctr_x)*distance;eye_z=ctr_z+(eye_z-ctr_z)*distance;
+        eye_y=CAM_CTR_Y+(CAM_EYE_Y-CAM_CTR_Y)*distance;
     }
-    {
-        float proj[16], view[16];
-        float hh = 1.0f, hw = hh * aspect;
-        mat4_ortho(proj, -hw, hw, -hh, hh, 0.1f, 20.0f);
-        mat4_zero(view);
-        /* Ortho view uses the inverse camera yaw so top-down motion matches
-         * the perspective camera heading instead of orbiting sideways. */
-        view[0]  =  cam_cos;
-        view[1]  = -cam_sin;
-        view[8]  =  cam_sin;
-        view[9]  =  cam_cos;
-        view[12] = -cam_cos * g_cam_pan_x - cam_sin * g_cam_pan_z;
-        view[13] =  cam_sin * g_cam_pan_x - cam_cos * g_cam_pan_z;
-        view[6]  =  1.0f;
-        view[14] = -5.0f;
-        view[15] =  1.0f;
-        mat4_mul(mvp_ortho, proj, view);
-    }
-
-    /* Blended MVP for 3D composite */
-    {
-        int i;
-        for (i = 0; i < 16; i++)
-            g_mvp_current[i] = mvp_ortho[i] + ts * (mvp_persp[i] - mvp_ortho[i]);
+    build_camera_mvp(g_mvp_current,(float)g_fb_w/g_fb_h,
+                     g_cam_pan_x,g_cam_pan_z,g_cam_rot,ts,g_content_offset.current.w);
+    for(int c=0;c<4;++c) {
+        g_mvp_current[c*4]+=g_mvp_current[c*4+3]*2*g_content_offset.current.x/CR_DEFAULT_WIDTH;
+        g_mvp_current[c*4+1]-=g_mvp_current[c*4+3]*2*g_content_offset.current.y/CR_DEFAULT_HEIGHT;
     }
 
     /* Pure 2D orthographic MVP for mask rendering.
@@ -991,24 +1328,6 @@ static void sync_camera_uniforms(void) {
         glUniform2f(g_uni_mask_scale, 0.5f / g_mask_half_w, 0.5f / g_mask_half_h);
     }
 
-    /* Shift projection to center maneuver in popup crop area.
-     * Full offset in 2D (flat view), reduced in 3D (perspective extends upward).
-     * ts = perspective blend: 0.0=ortho, 1.0=perspective. */
-    {
-        const float content_h = (float)(CR_DEFAULT_HEIGHT - 1);
-        const float popup_cy = CR_POPUP_Y + CR_POPUP_H * 0.5f;     /* 103.5 */
-        const float content_cy = content_h * 0.5f;                   /* 90 */
-        const float full_offset = -(popup_cy - content_cy) / content_cy; /* -0.15 */
-        /* 2D: full offset (centers junction in popup crop).
-         * 3D: half offset (compromise — centers between junction and road top). */
-        /* 2D: full offset (-0.15). 3D: adjustable extra offset. */
-        const float offset_y = full_offset + ts * g_3d_offset_adjust;
-        int c;
-        for (c = 0; c < 4; c++) {
-            g_mvp_current[c*4 + 1] += g_mvp_current[c*4 + 3] * offset_y;
-        }
-    }
-
     glUniformMatrix4fv(g_uni_mvp, 1, GL_FALSE, g_mvp_current);
 
     /* World-stable showroom lighting tuned to stay readable during camera motion. */
@@ -1020,6 +1339,9 @@ static void sync_camera_uniforms(void) {
     float ly = k_lighting_state.key_dir[1];
     float lz = -light_sin * base_lx + light_cos * base_lz;
     float ll = sqrtf(lx*lx + ly*ly + lz*lz);
+    g_light_vector[0]=lx/ll;
+    g_light_vector[1]=ly/ll;
+    g_light_vector[2]=lz/ll;
     glUniform3f(g_uni_light, lx/ll, ly/ll, lz/ll);
     glUniform3f(g_uni_light_key_color,
                 k_lighting_state.key_color[0],
@@ -1045,105 +1367,118 @@ static void sync_camera_uniforms(void) {
     /* Camera eye position for specular/rim -- lerp between modes */
     glUniform3f(g_uni_eye,
                 eye_x * ts + 0.0f * (1.0f - ts),
-                CAM_EYE_Y * ts + 5.0f * (1.0f - ts),
+                eye_y * ts + 5.0f * (1.0f - ts),
                 eye_z * ts + 0.0f * (1.0f - ts));
 
     g_z_bias = 0.0f;
 }
 
 void render_begin_frame(void) {
+    double now=viewport_now();
+    cr_rect_animate(&g_visible_area,now);
+    cr_rect_animate(&g_content_offset,now);
     /* Render into 2x supersample FBO */
     glBindFramebuffer(GL_FRAMEBUFFER, g_ss_fbo);
     glViewport(0, 0, g_ss_w, g_ss_h);
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glUseProgram(g_program);
-    glUniform1f(g_uni_tex_mode, 0.0f);
-    glUniform1f(g_uni_global_alpha, g_global_alpha);
+    use_lit_program();
+    render_set_mask_entry_fade(0,0);
     sync_camera_uniforms();
 }
 
 void render_set_global_alpha(float alpha) {
     g_global_alpha = alpha;
-    glUniform1f(g_uni_global_alpha, alpha);
+    if(g_active_pass==PASS_LIT)glUniform1f(g_uni_global_alpha,alpha);
+    else if(g_active_pass==PASS_FLAT)glUniform1f(g_flat_alpha,alpha);
+    else glUniform1f(g_shadow_alpha,alpha);
 }
 
 float render_get_global_alpha(void) {
     return g_global_alpha;
 }
 
-void render_bargraph(int level, float alpha) {
-    /* 16 bars, full height, shifted down by half a cell as top padding.
-     * Original proportions: 7px bar, 2px gap, 14px wide. Scale against the
-     * active output size so the overlay stays pixel-correct on the widget. */
-    const int   N_BARS = 16;
-    const float MARGIN = 10.0f;           /* px from edge */
-    const float design_w = 14.0f;
-    const float design_h = 7.0f;
-    const float design_gap = 2.0f;
-    const float design_total_h = N_BARS * design_h + (N_BARS - 1) * design_gap;
-    float fb_w = (g_win_w > 0) ? (float)g_win_w : (float)CR_DEFAULT_WIDTH;
-    float fb_h = (g_win_h > 0) ? (float)g_win_h : (float)CR_DEFAULT_HEIGHT;
-    float px = 2.0f / fb_w;
-    float py = 2.0f / fb_h;
-    float available_h = fb_h - 2.0f * MARGIN;
-    float scale;
-    float bar_w;
-    float bar_h;
-    float gap;
-    float bar_x;
+int render_set_visible_area(int x, int y, int w, int h) {
+    int changed=cr_rect_retarget(&g_visible_area,cr_visible_area(x,y,w,h),viewport_now());
+    return changed;
+}
 
-    if (available_h < 1.0f)
-        available_h = 1.0f;
-    scale = available_h / design_total_h;
-    bar_w = design_w * scale * px;
-    bar_h = design_h * scale * py;
-    gap   = design_gap * scale * py;
-    /* Bargraph at sidescreen right edge (cropped in popup — acceptable). */
-    bar_x = 1.0f - MARGIN * px - bar_w;
+void render_get_visible_area(cr_rect_t *current, cr_rect_t *target) {
+    if(current) *current=g_visible_area.current;
+    if(target) *target=g_visible_area.target;
+}
 
-    float total_h = N_BARS * bar_h + (N_BARS - 1) * gap;
-    float top_pad = (bar_h + gap) * 0.5f;  /* half a cell padding from top */
-    float base_y  = -total_h * 0.5f - top_pad;
-    float identity[16];
-    int i;
+void render_set_content_framing(float x,float y,float dolly) {
+    cr_rect_t offset={isfinite(x)?x:0,isfinite(y)?y:0,isfinite(dolly)?fminf(.18f,fmaxf(0,dolly)):0,
+                      isfinite(dolly) && dolly>0?CR_LANE_PANEL_HEIGHT:0};
+    cr_rect_retarget(&g_content_offset,offset,viewport_now());
+}
+void render_reset_content_offset(void) {memset(&g_content_offset,0,sizeof(g_content_offset));}
+void render_get_content_framing(float *x,float *y,float *dolly) {
+    if(x)*x=g_content_offset.current.x;
+    if(y)*y=g_content_offset.current.y;
+    if(dolly)*dolly=g_content_offset.current.w;
+}
 
-    memset(identity, 0, sizeof(identity));
-    identity[0] = identity[5] = identity[10] = identity[15] = 1.0f;
-
+void render_begin_overlay(cr_rect_t clip) {
+    float identity[16]={0};
+    identity[0]=identity[5]=identity[10]=identity[15]=1;
+    use_flat_program(3.0f);
+    render_set_mask_entry_fade(0,0);
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUniform1f(g_uni_tex_mode, 3.0f);
-    glUniformMatrix4fv(g_uni_mvp, 1, GL_FALSE, identity);
-    glUniform1f(g_uni_zbias, 0.0f);
+    glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
+    glUniform1f(g_flat_zbias,0);
+    glUniformMatrix4fv(g_flat_mvp,1,GL_FALSE,identity);
+    /* Round inward: even during the frame animation nothing leaks past crop. */
+    int left=(int)ceilf(clip.x*g_ss_w/CR_DEFAULT_WIDTH);
+    int right=(int)floorf((clip.x+clip.w)*g_ss_w/CR_DEFAULT_WIDTH);
+    int bottom=(int)ceilf((CR_DEFAULT_HEIGHT-clip.y-clip.h)*g_ss_h/CR_DEFAULT_HEIGHT);
+    int top=(int)floorf((CR_DEFAULT_HEIGHT-clip.y)*g_ss_h/CR_DEFAULT_HEIGHT);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(left,bottom,right>left?right-left:0,top>bottom?top-bottom:0);
+}
 
-    /* level 0 = 0 bars blue, level 16 = 16 bars blue.
-     * Bars drawn bottom (i=0) to top (i=15).
-     * Top bars blue, bottom bars grey — fills from top down. */
-    for (i = 0; i < N_BARS; i++) {
-        float y = base_y + i * (bar_h + gap);
-        float r, g, b;
-        int bar_idx = N_BARS - 1 - i;  /* top bar = idx 0 */
-        if (bar_idx < level) { r = 90.0f/255.0f; g = 170.0f/255.0f; b = 230.0f/255.0f; }
-        else                 { r = 100.0f/255.0f; g = 100.0f/255.0f; b = 100.0f/255.0f; }
-        glUniform4f(g_uni_color, r, g, b, alpha);
+void render_overlay_mesh(const float *xy,int count,float x,float y,
+                         float r,float g,float b,float a) {
+    int drawn=0;
+    if(!xy || count<=0 || count%3 || a<=0) return;
+    while(drawn<count) {
+        int n=count-drawn;
+        if(n>MAX_VERTS) n=MAX_VERTS-MAX_VERTS%3;
         vb_reset();
-        vb_v(bar_x,         y,         0, 0,0,1);
-        vb_v(bar_x + bar_w, y,         0, 0,0,1);
-        vb_v(bar_x + bar_w, y + bar_h, 0, 0,0,1);
-        vb_v(bar_x,         y,         0, 0,0,1);
-        vb_v(bar_x + bar_w, y + bar_h, 0, 0,0,1);
-        vb_v(bar_x,         y + bar_h, 0, 0,0,1);
-        glVertexAttribPointer(g_attr_pos,  3, GL_FLOAT, GL_FALSE, 24, g_vbuf);
-        glVertexAttribPointer(g_attr_norm, 3, GL_FLOAT, GL_FALSE, 24, g_vbuf + 3);
-        glEnableVertexAttribArray(g_attr_pos);
-        glEnableVertexAttribArray(g_attr_norm);
-        glDrawArrays(GL_TRIANGLES, 0, g_vcount);
+        for(int i=0;i<n;++i) {
+            int j=2*(drawn+i);
+            vb_v(2*(xy[j]+x)/CR_DEFAULT_WIDTH-1,
+                 1-2*(xy[j+1]+y)/CR_DEFAULT_HEIGHT,0,0,0,1);
+        }
+        vb_flush(r,g,b,a);drawn+=n;
     }
+}
 
+void render_end_overlay(void) {
+    glDisable(GL_SCISSOR_TEST);
+    use_lit_program();
     glEnable(GL_DEPTH_TEST);
-    glUniform1f(g_uni_tex_mode, 0.0f);
+}
+
+void render_overlay_cutout(cr_rect_t area,float fx,float fy,float alpha) {
+    if(alpha<=0 || area.w<=0 || area.h<=0 || !g_cutout_program)return;
+    float xy[]={area.x-fx,area.y-fy, area.x+area.w+fx,area.y-fy, area.x+area.w+fx,area.y+area.h,
+                area.x-fx,area.y-fy, area.x+area.w+fx,area.y+area.h, area.x-fx,area.y+area.h};
+    glBlendFuncSeparate(GL_ZERO,GL_ONE_MINUS_SRC_ALPHA,GL_ZERO,GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(g_cutout_program);
+    glUniform2f(g_cutout_size,CR_DEFAULT_WIDTH,CR_DEFAULT_HEIGHT);
+    glUniform4f(g_cutout_rect,area.x,area.y,area.x+area.w,area.y+area.h);
+    glUniform2f(g_cutout_feather,fx,fy);
+    glUniform1f(g_cutout_opacity,alpha);
+    glEnableVertexAttribArray(g_cutout_attr);
+    glVertexAttribPointer(g_cutout_attr,2,GL_FLOAT,GL_FALSE,0,xy);
+    glDrawArrays(GL_TRIANGLES,0,6);
+    glDisableVertexAttribArray(g_cutout_attr);
+    glUseProgram(g_active_pass==PASS_FLAT?g_flat_program:
+                 g_active_pass==PASS_SHADOW?g_shadow_program:g_program);
+    glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
 }
 
 /* Debug grid: draw colored checkerboard over the full 328x180 content area.
@@ -1153,6 +1488,33 @@ void render_bargraph(int level, float alpha) {
 static int g_debug_grid = 0;
 
 void render_set_debug_grid(int on) { g_debug_grid = on; }
+
+static void debug_area(cr_rect_t r) {
+    float identity[16]={0}, rects[4][4];
+    int i;
+    identity[0]=identity[5]=identity[10]=identity[15]=1;
+    rects[0][0]=r.x;rects[0][1]=r.y;rects[0][2]=r.x+r.w;rects[0][3]=r.y+1;
+    rects[1][0]=r.x;rects[1][1]=r.y+r.h-1;rects[1][2]=r.x+r.w;rects[1][3]=r.y+r.h;
+    rects[2][0]=r.x;rects[2][1]=r.y;rects[2][2]=r.x+1;rects[2][3]=r.y+r.h;
+    rects[3][0]=r.x+r.w-1;rects[3][1]=r.y;rects[3][2]=r.x+r.w;rects[3][3]=r.y+r.h;
+    glDisable(GL_DEPTH_TEST);
+    use_flat_program(3.0f);
+    glUniformMatrix4fv(g_flat_mvp,1,GL_FALSE,identity);
+    for(i=0;i<4;++i) {
+        float x0=2*rects[i][0]/CR_DEFAULT_WIDTH-1,x1=2*rects[i][2]/CR_DEFAULT_WIDTH-1;
+        float y0=1-2*rects[i][1]/CR_DEFAULT_HEIGHT,y1=1-2*rects[i][3]/CR_DEFAULT_HEIGHT;
+        vb_reset();vb_quad(x0,y0,0,x1,y0,0,x1,y1,0,x0,y1,0,0,0,1);
+        vb_flush(1,.04f,.08f,1);
+    }
+    use_lit_program();
+    glEnable(GL_DEPTH_TEST);
+}
+
+void render_debug_visible_area(void) {debug_area(g_visible_area.current);}
+void render_debug_small_area(void) {
+    cr_rect_t small={CR_POPUP_X,CR_POPUP_Y,CR_POPUP_W,CR_POPUP_H};
+    debug_area(small);
+}
 
 void render_debug_grid(void) {
     if (!g_debug_grid) return;
@@ -1169,10 +1531,10 @@ void render_debug_grid(void) {
 
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUniform1f(g_uni_tex_mode, 3.0f);
-    glUniformMatrix4fv(g_uni_mvp, 1, GL_FALSE, identity);
-    glUniform1f(g_uni_zbias, 0.0f);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    use_flat_program(3.0f);
+    glUniformMatrix4fv(g_flat_mvp, 1, GL_FALSE, identity);
+    glUniform1f(g_flat_zbias, 0.0f);
 
     for (row = 0; row < ROWS; row++) {
         for (col = 0; col < COLS; col++) {
@@ -1197,7 +1559,7 @@ void render_debug_grid(void) {
             if (col == COLS/2-1 && row == ROWS/2-1) { r = 1; g = 1; b = 1; }
             if (col == COLS/2   && row == ROWS/2  ) { r = 1; g = 1; b = 1; }
 
-            glUniform4f(g_uni_color, r, g, b, 0.6f);
+            glUniform4f(g_flat_color, r, g, b, 0.6f);
             vb_reset();
             vb_v(ix0, iy0, 0, 0,0,1);
             vb_v(ix1, iy0, 0, 0,0,1);
@@ -1205,72 +1567,22 @@ void render_debug_grid(void) {
             vb_v(ix0, iy0, 0, 0,0,1);
             vb_v(ix1, iy1, 0, 0,0,1);
             vb_v(ix0, iy1, 0, 0,0,1);
-            glVertexAttribPointer(g_attr_pos, 3, GL_FLOAT, GL_FALSE, 24, g_vbuf);
-            glVertexAttribPointer(g_attr_norm, 3, GL_FLOAT, GL_FALSE, 24, g_vbuf + 3);
-            glEnableVertexAttribArray(g_attr_pos);
-            glEnableVertexAttribArray(g_attr_norm);
+            glVertexAttribPointer(g_flat_attr_pos, 3, GL_FLOAT, GL_FALSE, 24, g_vbuf);
+            glVertexAttribPointer(g_flat_attr_uv, 3, GL_FLOAT, GL_FALSE, 24, g_vbuf + 3);
+            glEnableVertexAttribArray(g_flat_attr_pos);
+            glEnableVertexAttribArray(g_flat_attr_uv);
             glDrawArrays(GL_TRIANGLES, 0, g_vcount);
         }
     }
 
 
     glEnable(GL_DEPTH_TEST);
-    glUniform1f(g_uni_tex_mode, 0.0f);
+    use_lit_program();
 }
 
-
-/* Crop-outline overlay: draws just the rectangle the cluster layout lifts out of this 328x180
- * canvas, so the panel position can be eyeballed on the car without a debug build.
- *   CR_CROP_OUTLINE=1              enable (defaults to the popup rect)
- *   CR_CROP_RECT=x,y,w,h           show a different rect, e.g. Classic in-tube 59,27,210,153
- * Pairs with /tmp/cluster_geom.cfg on the Java side, which moves where that rect lands. */
-static int g_crop_outline = 0;
-static int g_crop_x = CR_POPUP_X, g_crop_y = CR_POPUP_Y;
-static int g_crop_w = CR_POPUP_W, g_crop_h = CR_POPUP_H;
-
-int  render_crop_outline_enabled(void) { return g_crop_outline; }
-void render_set_crop_outline(int on)   { g_crop_outline = on; }
-
-void render_set_crop_rect(int x, int y, int w, int h) {
-    if (w <= 0 || h <= 0) return;
-    g_crop_x = x; g_crop_y = y; g_crop_w = w; g_crop_h = h;
-}
-
-void render_crop_outline(void) {
-    if (!g_crop_outline) return;
-    glDisable(GL_DEPTH_TEST);
-    glUniform1f(g_uni_tex_mode, 0.0f);
-    /* red border at the crop rect */
-    {
-        float content_w = (float)CR_DEFAULT_WIDTH;
-        float content_h = (float)(CR_DEFAULT_HEIGHT - 1);
-        float px0 = (float)g_crop_x / (content_w * 0.5f) - 1.0f;
-        float py0 = 1.0f - (float)g_crop_y / (content_h * 0.5f);
-        float px1 = (float)(g_crop_x + g_crop_w) / (content_w * 0.5f) - 1.0f;
-        float py1 = 1.0f - (float)(g_crop_y + g_crop_h) / (content_h * 0.5f);
-        float t = 0.01f;  /* line thickness */
-
-        glUniform4f(g_uni_color, 1.0f, 0.0f, 0.0f, 0.9f);
-        /* Top */
-        vb_reset();
-        vb_v(px0,py0,0, 0,0,1); vb_v(px1,py0,0, 0,0,1); vb_v(px1,py0-t,0, 0,0,1);
-        vb_v(px0,py0,0, 0,0,1); vb_v(px1,py0-t,0, 0,0,1); vb_v(px0,py0-t,0, 0,0,1);
-        /* Bottom */
-        vb_v(px0,py1+t,0, 0,0,1); vb_v(px1,py1+t,0, 0,0,1); vb_v(px1,py1,0, 0,0,1);
-        vb_v(px0,py1+t,0, 0,0,1); vb_v(px1,py1,0, 0,0,1); vb_v(px0,py1,0, 0,0,1);
-        /* Left */
-        vb_v(px0,py0,0, 0,0,1); vb_v(px0+t,py0,0, 0,0,1); vb_v(px0+t,py1,0, 0,0,1);
-        vb_v(px0,py0,0, 0,0,1); vb_v(px0+t,py1,0, 0,0,1); vb_v(px0,py1,0, 0,0,1);
-        /* Right */
-        vb_v(px1-t,py0,0, 0,0,1); vb_v(px1,py0,0, 0,0,1); vb_v(px1,py1,0, 0,0,1);
-        vb_v(px1-t,py0,0, 0,0,1); vb_v(px1,py1,0, 0,0,1); vb_v(px1-t,py1,0, 0,0,1);
-        vb_flush(1, 0, 0, 0.9f);
-    }
-    glEnable(GL_DEPTH_TEST);
-}
 
 void render_sync_camera(void) {
-    glUseProgram(g_program);
+    use_lit_program();
     sync_camera_uniforms();
 }
 
@@ -1305,12 +1617,10 @@ void render_end_frame(void) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
-    glUseProgram(g_program);
-    glUniform1f(g_uni_tex_mode, 1.0f);  /* fullscreen blit passthrough */
-    glUniform1f(g_uni_global_alpha, 1.0f);
+    use_flat_program(1.0f);  /* fullscreen blit passthrough */
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, (FXAA_ENABLED && g_fxaa_prog) ? g_fxaa_tex : g_ss_tex);
-    glUniform1i(g_uni_tex, 0);
+    glUniform1i(g_flat_tex, 0);
     vb_reset();
     vb_v(-1, -1, 0, 0,0,1);
     vb_v( 1, -1, 0, 0,0,1);
@@ -1321,7 +1631,7 @@ void render_end_frame(void) {
     vb_flush(1, 1, 1, 1);
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
-    glUniform1f(g_uni_tex_mode, 0.0f);
+    use_lit_program();
 }
 
 void render_set_perspective(int enabled) {
@@ -1329,20 +1639,19 @@ void render_set_perspective(int enabled) {
 }
 
 int render_is_animating(void) {
-    return (fabsf(g_persp_t - (float)g_perspective) > 0.001f);
+    return fabsf(g_persp_t - (float)g_perspective) > 0.001f || g_visible_area.active || g_content_offset.active;
 }
 
 void render_set_raised(int raised) {
     g_raised = raised;
 }
 
-void render_set_mask_append(int append) {
-    g_mask_append = append;
-}
-
 void render_set_camera_pan(float x, float y) {
     g_cam_pan_x = x;
     g_cam_pan_z = y;  /* maneuver y -> 3D z */
+}
+void render_get_camera_pose(float *x,float *y,float *rotation) {
+    *x=g_cam_pan_x;*y=g_cam_pan_z;*rotation=g_cam_rot;
 }
 
 void render_set_camera_rotation(float angle_rad) {
@@ -1371,7 +1680,7 @@ int render_masks_dirty(void) {
  * ================================================================ */
 
 static GLuint g_flag_tex = 0;
-static int g_flag_frame_w = 0, g_flag_frame_h = 0, g_flag_frame_count = 0;
+static int g_flag_frame_count = 0;
 
 int render_load_flag_atlas(const char *path, int frame_w, int frame_h, int frame_count) {
     int atlas_w = frame_w * frame_count;
@@ -1406,8 +1715,6 @@ int render_load_flag_atlas(const char *path, int frame_w, int frame_h, int frame
     glBindTexture(GL_TEXTURE_2D, 0);
 
     free(data);
-    g_flag_frame_w = frame_w;
-    g_flag_frame_h = frame_h;
     g_flag_frame_count = frame_count;
 
     GLenum err = glGetError();
@@ -1421,18 +1728,22 @@ int render_get_flag_frame_count(void) {
 }
 
 void render_sprite_flag_ex(float x, float y, float size, int frame, int flip_x) {
-    /* Vertical billboard quad anchored at pole base.
+    /* Camera-facing billboard quad anchored at pole base.
      * Pole base in sprite UV: u=0.22, v=0.88 (from top).
-     * Quad = full sprite (size*2 x size*2), offset so pole base = (x, 0, y). */
+     * Quad = full sprite (size*2 x size*2), offset so pole base = (x, 0, y).
+     * The handoff camera may rotate 90-180 degrees before ARRIVED commits.
+     * Rotate the quad with that yaw so it never becomes edge-on and disappears. */
     float sprite_w = size * 2.0f;
     float sprite_h = size * 2.0f;
     float pole_u = 0.22f;     /* pole base X fraction in sprite */
     float pole_v_top = 0.88f; /* pole base Y fraction from top */
     float anchor_u = flip_x ? (1.0f - pole_u) : pole_u;
-
-    float fx0 = x - anchor_u * sprite_w;
-    float fx1 = fx0 + sprite_w;
-    float z = y;              /* maneuver y -> world z (depth) */
+    float local_l = -anchor_u * sprite_w;
+    float local_r = local_l + sprite_w;
+    float right_x = cosf(g_cam_rot);
+    float right_z = sinf(g_cam_rot);
+    float up_x = -right_z;
+    float up_z = right_x;
 
     /* 3D (perspective): vertical -- rises in world Y at fixed z.
      * 2D (ortho):       horizontal -- lies flat, extends in +z at ground level.
@@ -1446,15 +1757,21 @@ void render_sprite_flag_ex(float x, float y, float size, int frame, int flip_x) 
     float by_3d = -(1.0f - pole_v_top) * sprite_h;
     float by_2d = flat_h;
     float bot_y = by_3d * t + by_2d * (1.0f - t);
-    float bot_z = z;
-
-    /* Top edge: in 3D rises up in Y, in 2D extends back in Z */
+    /* Top edge: in 3D rises in world Y; in 2D it extends along the
+     * camera-relative screen-up axis on the road plane. */
     float ty_3d = by_3d + sprite_h;
     float ty_2d = flat_h;
     float top_y = ty_3d * t + ty_2d * (1.0f - t);
-    float tz_3d = z;
-    float tz_2d = z + sprite_h;
-    float top_z = tz_3d * t + tz_2d * (1.0f - t);
+    float flat_top = sprite_h * (1.0f - t);
+
+    float lx0 = x + right_x * local_l;
+    float lz0 = y + right_z * local_l;
+    float rx0 = x + right_x * local_r;
+    float rz0 = y + right_z * local_r;
+    float lx1 = lx0 + up_x * flat_top;
+    float lz1 = lz0 + up_z * flat_top;
+    float rx1 = rx0 + up_x * flat_top;
+    float rz1 = rz0 + up_z * flat_top;
 
     glDisable(GL_DEPTH_TEST);
     glUniformMatrix4fv(g_uni_mvp, 1, GL_FALSE, g_mvp_current);
@@ -1470,40 +1787,39 @@ void render_sprite_flag_ex(float x, float y, float size, int frame, int flip_x) 
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, g_flag_tex);
-        glUniform1i(g_uni_tex, 0);
-        glUniform1f(g_uni_tex_mode, 4.0f);
+        use_flat_program(4.0f);
+        glUniformMatrix4fv(g_flat_mvp,1,GL_FALSE,g_mvp_current);
+        glUniform1f(g_flat_zbias,0.0f);
+        glUniform1i(g_flat_tex,0);
 
         vb_reset();
-        vb_v(fx0, bot_y, bot_z,  ul, 1.0f, 0);
-        vb_v(fx1, bot_y, bot_z,  ur, 1.0f, 0);
-        vb_v(fx1, top_y, top_z,  ur, 0.0f, 0);
-        vb_v(fx0, bot_y, bot_z,  ul, 1.0f, 0);
-        vb_v(fx1, top_y, top_z,  ur, 0.0f, 0);
-        vb_v(fx0, top_y, top_z,  ul, 0.0f, 0);
+        vb_v(lx0, bot_y, lz0,  ul, 1.0f, 0);
+        vb_v(rx0, bot_y, rz0,  ur, 1.0f, 0);
+        vb_v(rx1, top_y, rz1,  ur, 0.0f, 0);
+        vb_v(lx0, bot_y, lz0,  ul, 1.0f, 0);
+        vb_v(rx1, top_y, rz1,  ur, 0.0f, 0);
+        vb_v(lx1, top_y, lz1,  ul, 0.0f, 0);
 
-        glUniform4f(g_uni_color, 1.0f, 1.0f, 1.0f, 1.0f);
-        glUniform1f(g_uni_zbias, 0.0f);
-        glVertexAttribPointer(g_attr_pos,  3, GL_FLOAT, GL_FALSE, 24, g_vbuf);
-        glVertexAttribPointer(g_attr_norm, 3, GL_FLOAT, GL_FALSE, 24, g_vbuf + 3);
-        glEnableVertexAttribArray(g_attr_pos);
-        glEnableVertexAttribArray(g_attr_norm);
+        glVertexAttribPointer(g_flat_attr_pos,3,GL_FLOAT,GL_FALSE,24,g_vbuf);
+        glVertexAttribPointer(g_flat_attr_uv,3,GL_FLOAT,GL_FALSE,24,g_vbuf+3);
+        glEnableVertexAttribArray(g_flat_attr_pos);
+        glEnableVertexAttribArray(g_flat_attr_uv);
         glDrawArrays(GL_TRIANGLES, 0, 6);
+        use_lit_program();
     } else {
         /* Fallback: magenta quad when atlas not loaded */
-        glUniform1f(g_uni_tex_mode, 0.0f);
         vb_reset();
-        vb_v(fx0, bot_y, bot_z,  0,0,1);
-        vb_v(fx1, bot_y, bot_z,  0,0,1);
-        vb_v(fx1, top_y, top_z,  0,0,1);
-        vb_v(fx0, bot_y, bot_z,  0,0,1);
-        vb_v(fx1, top_y, top_z,  0,0,1);
-        vb_v(fx0, top_y, top_z,  0,0,1);
+        vb_v(lx0, bot_y, lz0,  0,0,1);
+        vb_v(rx0, bot_y, rz0,  0,0,1);
+        vb_v(rx1, top_y, rz1,  0,0,1);
+        vb_v(lx0, bot_y, lz0,  0,0,1);
+        vb_v(rx1, top_y, rz1,  0,0,1);
+        vb_v(lx1, top_y, lz1,  0,0,1);
         render_set_material(RENDER_MAT_GENERIC_SOLID);
         vb_flush(1.0f, 0.0f, 1.0f, 1.0f);
     }
 
     glEnable(GL_DEPTH_TEST);
-    glUniform1f(g_uni_tex_mode, 0.0f);
 }
 
 void render_sprite_flag(float x, float y, float size, int frame) {
@@ -1520,6 +1836,9 @@ void render_shutdown(void) {
     if (g_fxaa_fbo) { glDeleteFramebuffers(1, &g_fxaa_fbo); g_fxaa_fbo = 0; }
     if (g_fxaa_tex) { glDeleteTextures(1, &g_fxaa_tex); g_fxaa_tex = 0; }
     if (g_fxaa_prog) { glDeleteProgram(g_fxaa_prog); g_fxaa_prog = 0; }
+    if (g_cutout_program) { glDeleteProgram(g_cutout_program); g_cutout_program = 0; }
+    if (g_flat_program) {glDeleteProgram(g_flat_program);g_flat_program=0;}
+    if (g_shadow_program) {glDeleteProgram(g_shadow_program);g_shadow_program=0;}
     if (g_flag_tex) {
         glDeleteTextures(1, &g_flag_tex);
         g_flag_tex = 0;
@@ -1538,15 +1857,12 @@ void render_shutdown(void) {
  * ================================================================ */
 
 static void begin_mask(int fbo_idx) {
-    if (g_mask_append)
-        fbo_bind_noclear(fbo_idx);
-    else
-        fbo_bind(fbo_idx);
+    fbo_bind(fbo_idx);
     glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
-    glUniform1f(g_uni_tex_mode, 3.0f);
-    glUniformMatrix4fv(g_uni_mvp, 1, GL_FALSE, g_mvp_ortho_2d);
+    use_flat_program(3.0f);
+    glUniformMatrix4fv(g_flat_mvp,1,GL_FALSE,g_mvp_ortho_2d);
     g_z_bias = 0.0f;
 }
 
@@ -1555,8 +1871,8 @@ static void end_mask(void) {
     glEnable(GL_BLEND);
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
-    glUniform1f(g_uni_tex_mode, 0.0f);
-    glUniformMatrix4fv(g_uni_mvp, 1, GL_FALSE, g_mvp_current);
+    use_lit_program();
+    glUniformMatrix4fv(g_uni_mvp,1,GL_FALSE,g_mvp_current);
 }
 
 /* Apply a 2D rigid transform to the mask MVP (for rendering a second maneuver).
@@ -1590,33 +1906,13 @@ void render_pop_mask_transform(void) {
     memcpy(g_mvp_ortho_2d, g_mvp_ortho_2d_saved, sizeof(g_mvp_ortho_2d));
 }
 
-/* Resume mask -- bind without clearing (append to existing mask content) */
-static void resume_mask(int fbo_idx) {
-    fbo_bind_noclear(fbo_idx);
-    glDisable(GL_BLEND);
-    glDisable(GL_DEPTH_TEST);
-    glDepthMask(GL_FALSE);
-    glUniform1f(g_uni_tex_mode, 3.0f);
-    glUniformMatrix4fv(g_uni_mvp, 1, GL_FALSE, g_mvp_ortho_2d);
-    g_z_bias = 0.0f;
-}
-
-void render_resume_outline_mask(void) { resume_mask(FBO_ROAD); }
-void render_resume_fill_mask(void)    { resume_mask(FBO_ROAD); }
-
 void render_begin_outline_mask(void) { begin_mask(FBO_ROAD); }
 void render_end_outline_mask(void)   { end_mask(); }
-
-/* Fill mask now shares the same FBO as outline (painter's algorithm).
- * begin_fill resumes (no clear) so fill draws on top of outline content. */
-void render_begin_fill_mask(void) { resume_mask(FBO_ROAD); }
-void render_end_fill_mask(void)   { end_mask(); }
 
 void render_begin_route_mask(void) {
     g_route_mask_ready = 1;
     begin_mask(FBO_ROUTE);
 }
-void render_end_route_mask(void)   { end_mask(); }
 
 /* ================================================================
  * Composite pipeline -- single-FBO painter's algorithm
@@ -1626,18 +1922,14 @@ void render_end_route_mask(void)   { end_mask(); }
  * No subtraction needed -- border/fill distinction is baked into FBO colors.
  * ================================================================ */
 
-/* Render a 3D ground-plane quad textured with a mask FBO.
- * tex_mode: 2 = uniform color + mask alpha, 7 = FBO color as base.
- * y_height: world Y of the quad (0 for ground, ROUTE_Y for route). */
-static void composite_layer_ex(int fbo_tex_idx, float y_height,
-                                render_material_t material, float tex_mode_val) {
-    const material_preset_t *preset = material_preset(material);
+/* The road FBO supplies fill and border RGB for one lit ground-plane quad. */
+static void composite_road_layer(void) {
+    const material_preset_t *preset = material_preset(RENDER_MAT_ROAD_ASPHALT);
 
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, g_fbo_texs[fbo_tex_idx]);
+    glBindTexture(GL_TEXTURE_2D, g_fbo_texs[FBO_ROAD]);
     glUniform1i(g_uni_tex, 0);
-    glUniform1f(g_uni_tex_mode, tex_mode_val);
-    glUniform2f(g_uni_resolution, (float)g_fb_w, (float)g_fb_h);
+    glUniform1f(g_uni_tex_mode, 7.0f);
 
     apply_material(preset,
                    preset->base_color[0], preset->base_color[1],
@@ -1648,15 +1940,14 @@ static void composite_layer_ex(int fbo_tex_idx, float y_height,
     glUniformMatrix4fv(g_uni_mvp, 1, GL_FALSE, g_mvp_current);
 
     float gx = g_mask_half_w * 3.0f, gz = g_mask_half_h * 3.0f;
-    float y = y_height;
 
     vb_reset();
-    vb_v(-gx, y, -gz,  0, 1, 0);
-    vb_v( gx, y, -gz,  0, 1, 0);
-    vb_v( gx, y,  gz,  0, 1, 0);
-    vb_v(-gx, y, -gz,  0, 1, 0);
-    vb_v( gx, y,  gz,  0, 1, 0);
-    vb_v(-gx, y,  gz,  0, 1, 0);
+    vb_v(-gx, 0.0f, -gz,  0, 1, 0);
+    vb_v( gx, 0.0f, -gz,  0, 1, 0);
+    vb_v( gx, 0.0f,  gz,  0, 1, 0);
+    vb_v(-gx, 0.0f, -gz,  0, 1, 0);
+    vb_v( gx, 0.0f,  gz,  0, 1, 0);
+    vb_v(-gx, 0.0f,  gz,  0, 1, 0);
 
     glVertexAttribPointer(g_attr_pos,  3, GL_FLOAT, GL_FALSE, 24, g_vbuf);
     glVertexAttribPointer(g_attr_norm, 3, GL_FLOAT, GL_FALSE, 24, g_vbuf + 3);
@@ -1667,15 +1958,18 @@ static void composite_layer_ex(int fbo_tex_idx, float y_height,
 
 void render_composite(void) {
     /* Composite to screen as 3D quads with materials + perspective */
+    use_lit_program();
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    /* RGB is associated as it enters the transparent framebuffer. Alpha must
+     * use source-over too, not SRC_ALPHA (which incorrectly squares it). */
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
     /* Layer 1: Road (combined outline+fill via painter's algorithm).
      * tex_mode 7 reads FBO RGB as base color -- white border gets paint-like shading,
      * grey fill gets asphalt-like shading, all with one material preset. */
-    composite_layer_ex(FBO_ROAD, 0.0f, RENDER_MAT_ROAD_ASPHALT, 7.0f);
+    composite_road_layer();
 
     /* Layer 2: Route shadow on road surface. Only sample the route mask when it
      * was actually rendered; otherwise skip the pass instead of reading an
@@ -1684,12 +1978,9 @@ void render_composite(void) {
         float gx = g_mask_half_w * 3.0f, gz = g_mask_half_h * 3.0f;
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, g_fbo_texs[FBO_ROUTE]);
-        glUniform1i(g_uni_tex, 0);
-        glUniform1f(g_uni_tex_mode, 9.0f);
-        glUniform4f(g_uni_color, 0.0f, 0.0f, 0.0f, 1.0f);
-        glUniform1f(g_uni_zbias, g_z_bias);
+        use_shadow_program(9.0f);
+        glUniform1f(g_shadow_zbias, g_z_bias);
         g_z_bias += Z_BIAS_STEP;
-        glUniformMatrix4fv(g_uni_mvp, 1, GL_FALSE, g_mvp_current);
 
         vb_reset();
         vb_v(-gx, 0.0005f, -gz, 0,1,0);
@@ -1698,15 +1989,14 @@ void render_composite(void) {
         vb_v(-gx, 0.0005f, -gz, 0,1,0);
         vb_v( gx, 0.0005f,  gz, 0,1,0);
         vb_v(-gx, 0.0005f,  gz, 0,1,0);
-        glVertexAttribPointer(g_attr_pos, 3, GL_FLOAT, GL_FALSE, 24, g_vbuf);
-        glVertexAttribPointer(g_attr_norm, 3, GL_FLOAT, GL_FALSE, 24, g_vbuf + 3);
-        glEnableVertexAttribArray(g_attr_pos);
-        glEnableVertexAttribArray(g_attr_norm);
+        glVertexAttribPointer(g_shadow_attr_pos,3,GL_FLOAT,GL_FALSE,24,g_vbuf);
+        glVertexAttribPointer(g_shadow_attr_norm,3,GL_FLOAT,GL_FALSE,24,g_vbuf+3);
+        glEnableVertexAttribArray(g_shadow_attr_pos);
+        glEnableVertexAttribArray(g_shadow_attr_norm);
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
 
-    /* Restore tex_mode for any subsequent draws */
-    glUniform1f(g_uni_tex_mode, 0.0f);
+    use_lit_program();
 
     g_masks_dirty = 0;
 }
@@ -1784,19 +2074,6 @@ void render_triangle(float x0, float y0, float x1, float y1, float x2, float y2,
                 ex[i][2],bt,ex[i][3], ex[i][0],bt,ex[i][1],  enx,0,enz);
     }
     vb_flush(r, g, b, a);
-}
-
-void render_arrowhead(float bx, float by, float angle_rad, float size,
-                      float r, float g, float b, float a) {
-    float dx = cosf(angle_rad), dy = sinf(angle_rad);
-    float px = -dy, py = dx;
-    float hw = size * 0.885f;
-
-    float tip_x = bx + dx * size, tip_y = by + dy * size;
-    float l_x = bx + px * hw,     l_y = by + py * hw;
-    float r_x = bx - px * hw,     r_y = by - py * hw;
-
-    render_triangle(tip_x, tip_y, l_x, l_y, r_x, r_y, r, g, b, a);
 }
 
 void render_disc(float cx, float cy, float radius, int segments,
@@ -1897,13 +2174,4 @@ void render_rect(float x, float y, float w, float h_rect,
     vb_quad(x0,tp,z1, x0,bt,z1, x0,bt,z0, x0,tp,z0,   -1,0,0);        /* left */
     vb_quad(x1,tp,z0, x1,bt,z0, x1,bt,z1, x1,tp,z1,    1,0,0);        /* right */
     vb_flush(r, g, b, a);
-}
-
-/* Legacy stub pass API -- kept for compatibility but now uses mask pipeline */
-void render_begin_stubs(void) {
-    begin_mask(FBO_OUTLINE);
-}
-
-void render_end_stubs(void) {
-    end_mask();
 }

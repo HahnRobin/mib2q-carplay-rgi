@@ -5,13 +5,8 @@
  * Receives maneuver commands, handles all animation/transitions internally.
  *
  * macOS: GLFW window for development.
- * QNX:   take over native displayable 20 (DISPLAYABLE_MAP_ROUTE_GUIDANCE,
- *        the slot KOMO RG widget normally uses) by registering our own
- *        screen window with ID="20".  setActiveDisplayable(4, 20) (called
- *        by stock cluster firmware in preContextSwitchHook) wires the MOST
- *        encoder to capture our window for the LVDS stream landing on the
- *        VC's MAP tab.  Native widget process keeps running but is no
- *        longer the source for displayable 20 while we own the cluster.
+ * QNX: own managed displayable 98 in Java-selected cluster contexts.
+ * See protocol.h for DisplayManager routing and ownership.
  *
  * Copyright (c) 2026 LuKa (@LuKa_dev)
  */
@@ -35,9 +30,14 @@
 #define FRAME_TIME_NS  (1000000000L / TARGET_FPS)
 #include "gl_compat.h"
 #include "render.h"
+#include "arrow_progress.h"
 #include "protocol.h"
+#include "maneuver_command.h"
 #include "maneuver.h"
 #include "server.h"
+#include "scene/scene.h"
+#include "lane_guidance.h"
+#include "lane_panel.h"
 
 #define WINDOW_W CR_DEFAULT_WIDTH
 #define WINDOW_H CR_DEFAULT_HEIGHT
@@ -79,6 +79,7 @@ typedef struct {
     maneuver_state_t current;
     maneuver_state_t next;
     maneuver_state_t pending;
+    cr_scene_t *current_scene, *next_scene;
     int              has_current;   /* invariant: 1 after clear_maneuver() initializes FOLLOW_STREET */
     int              has_next;
     int              has_pending;   /* queued during PUSHING */
@@ -87,31 +88,116 @@ typedef struct {
 } cr_engine_t;
 
 static cr_engine_t g_engine;
+// Independent panel input. Never passed into route geometry or animation.
+static cr_lane_guidance_t g_lane_guidance;
+static cr_lane_decoder_t g_lane_decoder;
+static cr_lane_panel_t *g_lane_panel;
+
+static cr_scene_t *engine_scene(const maneuver_state_t *m) {
+    if(m==&g_engine.current)return g_engine.current_scene;
+    if(m==&g_engine.next)return g_engine.next_scene;
+    return NULL;
+}
+static int scene_handles(void *ctx,const maneuver_state_t *m) {
+    cr_scene_t *s=engine_scene(m);(void)ctx;
+    return s && cr_scene_route(s) && !cr_scene_is_native(s);
+}
+static void scene_route(void *ctx,const maneuver_state_t *m,route_path_t *out) {
+    const route_path_t *p=cr_scene_route(engine_scene(m));(void)ctx;
+    if(p)*out=*p;else memset(out,0,sizeof(*out));
+}
+static float scene_elevation(void *ctx,const maneuver_state_t *m) {
+    const cr_scene_info_t *info=cr_scene_info(engine_scene(m));(void)ctx;
+    return info?info->route_elevation:0;
+}
+static void scene_paint(void *ctx,const maneuver_state_t *m,float x,float y,float c,float s) {
+    (void)ctx;cr_scene_paint(engine_scene(m),x,y,c,s);
+}
+static void prepare_engine_scene(cr_scene_t *scene,const maneuver_state_t *m) {
+    if(!scene)return;
+    cr_scene_input_t in;cr_scene_view_t view;
+    memset(&in,0,sizeof(in));in.maneuver=*m;
+    /* The canonical small composition paints the entire source in both stages. */
+    view.compact=1;render_get_layout_matrix(view.projection);
+    unsigned before=cr_scene_info(scene)->builds;
+    if(!cr_scene_prepare(scene,&in,&view)) {
+        fprintf(stderr,"scene: invalid input; ordinary maneuver fallback\n");return;
+    }
+    const cr_scene_info_t *info=cr_scene_info(scene);
+    if(info->builds!=before)
+        fprintf(stderr,"scene: kind=%d fallback=%d commands=%u\n",
+            info->kind,info->fallback,info->command_count);
+}
+static void prepare_engine_scenes(void) {
+    prepare_engine_scene(g_engine.current_scene,&g_engine.current);
+    if(g_engine.has_next)prepare_engine_scene(g_engine.next_scene,&g_engine.next);
+}
 
 /* eglSwapBuffers on the old Adreno/WFD stack has no timeout. A wedged process
  * still has a live PID, so the external supervisor cannot distinguish it from
  * a healthy always-on renderer. This watchdog never calls EGL or touches the
  * render state; it only observes loop progress and exits this isolated process
  * before a stuck graphics client can linger indefinitely. */
-static volatile unsigned long g_loop_progress;
+/* A breadcrumb is only read on timeout.  No per-frame logging or graphics
+ * calls from the watchdog: a blocked EGL/Screen client may hold libc locks. */
+typedef enum {
+    WATCH_STARTUP, WATCH_POLL, WATCH_COMMANDS, WATCH_ENGINE, WATCH_LANE_UPDATE,
+    WATCH_LANE_FRAMING, WATCH_PREPARE, WATCH_BEGIN_FRAME,
+    WATCH_SCENE_DRAW, WATCH_LANE_DRAW, WATCH_END_FRAME,
+    WATCH_SCREENSHOT, WATCH_SWAP, WATCH_WINDOW_PROBE,
+    WATCH_HEARTBEAT, WATCH_SLEEP, WATCH_IDLE
+} renderer_watch_stage_t;
+static unsigned long g_loop_progress;
+static int g_watch_stage = WATCH_STARTUP;
 static volatile int g_renderer_running = 1;
 static volatile int g_render_loop_started;
 
+static void watch_stage(renderer_watch_stage_t stage) {
+    __sync_lock_test_and_set(&g_watch_stage, (int)stage);
+}
+
+static const char *watch_stage_name(int stage) {
+    switch (stage) {
+    case WATCH_STARTUP: return "startup";
+    case WATCH_POLL: return "poll";
+    case WATCH_COMMANDS: return "commands";
+    case WATCH_ENGINE: return "engine";
+    case WATCH_LANE_UPDATE: return "lane-update";
+    case WATCH_LANE_FRAMING: return "lane-framing";
+    case WATCH_PREPARE: return "prepare";
+    case WATCH_BEGIN_FRAME: return "begin-frame";
+    case WATCH_SCENE_DRAW: return "scene-draw";
+    case WATCH_LANE_DRAW: return "lane-draw";
+    case WATCH_END_FRAME: return "end-frame";
+    case WATCH_SCREENSHOT: return "screenshot";
+    case WATCH_SWAP: return "egl-swap";
+    case WATCH_WINDOW_PROBE: return "window-probe";
+    case WATCH_HEARTBEAT: return "heartbeat";
+    case WATCH_SLEEP: return "sleep";
+    case WATCH_IDLE: return "idle";
+    default: return "unknown";
+    }
+}
+
 static void *renderer_watchdog_main(void *unused) {
-    unsigned long last = g_loop_progress;
+    unsigned long last = __sync_fetch_and_add(&g_loop_progress, 0);
     int stalledSeconds = 0;
     (void)unused;
     while (g_renderer_running) {
         struct timespec pause = { 1, 0 };
         while (nanosleep(&pause, &pause) != 0 && errno == EINTR) { }
         if (!g_renderer_running) break;
-        if (g_loop_progress != last) {
-            last = g_loop_progress;
+        unsigned long progress = __sync_fetch_and_add(&g_loop_progress, 0);
+        if (progress != last) {
+            last = progress;
             stalledSeconds = 0;
         } else if (++stalledSeconds >= (g_render_loop_started ? 5 : 15)) {
-            static const char msg[] =
-                "maneuver_render: render/EGL progress watchdog TIMEOUT; exiting isolated renderer\n";
+            static const char msg[] = "maneuver_render: progress watchdog TIMEOUT phase=";
+            static const char newline[] = "\n";
+            const char *phase = watch_stage_name(__sync_fetch_and_add(&g_watch_stage, 0));
             (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+            (void)write(STDERR_FILENO, phase, strlen(phase));
+            (void)write(STDERR_FILENO, newline, sizeof(newline) - 1);
             _exit(89);
         }
     }
@@ -125,45 +211,31 @@ static int   g_fade_active = 0;
 #define FADE_SPEED 0.125f  /* per-frame step (~0.27s / 8 frames at 30fps) */
 static int   g_cleared = 1;
 
-/* Bargraph overlay */
-static int   g_bargraph_on = 0;     /* 0=off, 1=on, 2=blink */
-static int   g_bargraph_level = 0;  /* 0..16 */
+/* Progress is rendered directly on the route arrow. */
+static cr_arrow_progress_t g_arrow;
+static int g_pending_progress_level=16,g_pending_progress_state=CR_PROGRESS_OFF;
 static int   g_persp_deferred = 0;       /* pending perspective change after push */
 static int   g_persp_deferred_value = 1; /* 0=2D, 1=3D */
-static float g_bargraph_alpha = 0.0f;  /* fade in/out */
-#define BARGRAPH_FADE_SPEED 0.06f      /* per-frame (~0.55s at 30fps) */
-static int   g_bargraph_blink_vis = 1;  /* blink phase: 1=show, 0=hide */
-static int   g_bargraph_blink_timer = 0;
-#define BARGRAPH_BLINK_FRAMES (int)(0.6f * TARGET_FPS)  /* 600ms */
-/* Deferred bargraph from maneuver payload -- applied when transition settles */
-static int   g_bargraph_deferred = 0;
-static int   g_bargraph_deferred_level = 0;
-static int   g_bargraph_deferred_mode = 0;
-
-/* Decode CMD_MANEUVER payload into maneuver_state_t */
-static void decode_maneuver(const cr_cmd_t *cmd, maneuver_state_t *out) {
-    const uint8_t *p = cmd->payload;
-    int i, count;
-
-    memset(out, 0, sizeof(*out));
-    out->icon         = CR_MAN_ICON(p);
-    out->direction    = CR_MAN_DIRECTION(p);
-    out->exit_angle   = CR_MAN_EXIT_ANGLE(p);
-    out->driving_side = CR_MAN_DRIVING_SIDE(p);
-
-    count = CR_MAN_JUNC_COUNT(p);
-    if (count > MAX_JUNCTION_ANGLES) count = MAX_JUNCTION_ANGLES;
-    out->junction_angle_count = count;
-    for (i = 0; i < count; i++)
-        out->junction_angles[i] = CR_MAN_JUNC_ANGLE(p, i);
-}
-
 /* Apply a new maneuver to the engine */
-static void engine_apply_maneuver(const maneuver_state_t *state) {
+static void engine_apply_maneuver(const maneuver_state_t *state,double now) {
+    if (state->icon == ICON_NONE || g_engine.current.icon == ICON_NONE) {
+        g_engine.current = *state;
+
+        g_engine.has_current = 1;
+        g_engine.has_next = g_engine.has_pending = 0;
+        g_engine.phase = ENGINE_IDLE;
+        cr_progress_reset(&g_arrow);
+        maneuver_set_slide(1.0f);
+        render_invalidate_masks();
+        g_engine.dirty = 1;
+        return;
+    }
     if (g_engine.phase == ENGINE_PUSHING || g_engine.phase == ENGINE_SLIDING_IN) {
         /* Mid-transition: queue into pending slot, don't disturb current animation */
         g_engine.pending = *state;
+
         g_engine.has_pending = 1;
+        g_pending_progress_level=16;g_pending_progress_state=CR_PROGRESS_OFF;
         fprintf(stderr, "engine: queued icon=%d (phase=%d)\n",
                 state->icon, g_engine.phase);
         return;
@@ -171,13 +243,57 @@ static void engine_apply_maneuver(const maneuver_state_t *state) {
 
     /* IDLE: store as next, start push */
     g_engine.next = *state;
+
     g_engine.has_next = 1;
-    g_bargraph_on = 0;
+    cr_progress_begin_handoff(&g_arrow,now);
     maneuver_start_push();
     g_engine.phase = ENGINE_PUSHING;
     render_invalidate_masks();
     g_engine.dirty = 1;
     fprintf(stderr, "engine: new maneuver icon=%d\n", state->icon);
+}
+
+/* A roads-only update belongs to the latest accepted command. During a push
+ * that is next (or pending), never the outgoing current maneuver. */
+static void engine_refresh_maneuver(const maneuver_state_t *state,double now) {
+    if (state->icon == ICON_NONE || g_engine.current.icon == ICON_NONE) {
+        engine_apply_maneuver(state,now);
+        return;
+    }
+    if (g_engine.has_pending) {g_engine.pending = *state;}
+    else {
+        if (g_engine.has_next) {g_engine.next = *state;}
+        else {g_engine.current = *state;}
+    }
+    render_invalidate_masks();
+    g_engine.dirty = 1;
+}
+
+/* TCP progress belongs to the latest accepted maneuver. A third queued
+ * maneuver must not overwrite the target of the route currently entering. */
+static void engine_set_progress(int level,int state,double now) {
+    if(g_engine.has_pending) {
+        g_pending_progress_level=level;g_pending_progress_state=state;
+    } else cr_progress_set(&g_arrow,level,state,now);
+    g_engine.dirty=1;
+}
+
+static void engine_promote_pending(double now) {
+    g_engine.next=g_engine.pending;
+    g_engine.has_next=1;g_engine.has_pending=0;
+    cr_progress_begin_handoff(&g_arrow,now);
+    cr_progress_set(&g_arrow,g_pending_progress_level,g_pending_progress_state,now);
+    maneuver_start_push();g_engine.phase=ENGINE_PUSHING;
+    render_invalidate_masks();g_engine.dirty=1;
+    fprintf(stderr,"engine: promoting queued icon=%d\n",g_engine.next.icon);
+}
+
+static void engine_apply_presentation(void) {
+    if (g_persp_deferred) {
+        render_set_perspective(g_persp_deferred_value);
+        g_persp_deferred = 0;
+        g_engine.dirty = 1;
+    }
 }
 
 /* Advance engine state machine */
@@ -186,6 +302,9 @@ static void engine_apply_maneuver(const maneuver_state_t *state) {
  * cleared latch prevent it from earning FRAME_READY.  The next CMD_MANEUVER
  * fades the deterministic scene back in. */
 static void clear_maneuver(void) {
+    cr_lane_clear(&g_lane_decoder, &g_lane_guidance);
+    cr_lane_panel_clear(g_lane_panel);
+    render_reset_content_offset();
     memset(&g_engine.current, 0, sizeof(g_engine.current));
     g_engine.current.icon = ICON_APPROACH;
     g_engine.has_current = 1;
@@ -194,12 +313,7 @@ static void clear_maneuver(void) {
     g_engine.phase       = ENGINE_IDLE;
     maneuver_set_slide(1.0f);
     render_invalidate_masks();
-    g_bargraph_on    = 0;
-    g_bargraph_level = 0;
-    g_bargraph_alpha = 0.0f;
-    g_bargraph_deferred = 0;
-    g_bargraph_blink_vis = 1;
-    g_bargraph_blink_timer = 0;
+    cr_progress_reset(&g_arrow);
     g_persp_deferred = 0;
     g_fade_active    = 0;
     g_fade_alpha     = 0.0f;
@@ -208,28 +322,25 @@ static void clear_maneuver(void) {
     g_engine.dirty   = 1;
 }
 
-static void engine_tick(void) {
+static void engine_tick(double now) {
     switch (g_engine.phase) {
     case ENGINE_PUSHING:
         if (!maneuver_is_pushing()) {
             /* Push complete -- commit next as current */
             if (g_engine.has_next) {
                 g_engine.current = g_engine.next;
+                cr_scene_t *old=g_engine.current_scene;
+                g_engine.current_scene=g_engine.next_scene;g_engine.next_scene=old;
                 g_engine.has_next = 0;
             }
             maneuver_commit_pushed_state(&g_engine.current);
+            cr_progress_finish_handoff(&g_arrow,now);
             render_invalidate_masks();
             g_engine.dirty = 1;
 
             if (g_engine.has_pending) {
                 /* Promote pending -> next, immediately start new push */
-                g_engine.next = g_engine.pending;
-                g_engine.has_next = 1;
-                g_engine.has_pending = 0;
-                maneuver_start_push();
-                g_engine.phase = ENGINE_PUSHING;
-                fprintf(stderr, "engine: promoting queued icon=%d\n",
-                        g_engine.next.icon);
+                engine_promote_pending(now);
             } else {
                 g_engine.phase = ENGINE_SLIDING_IN;
                 /* Crossfade during push already brought next roads to full alpha,
@@ -241,42 +352,16 @@ static void engine_tick(void) {
         if (!maneuver_is_animating()) {
             if (g_engine.has_pending) {
                 /* Promote pending -> next, start push */
-                g_engine.next = g_engine.pending;
-                g_engine.has_next = 1;
-                g_engine.has_pending = 0;
-                maneuver_start_push();
-                g_engine.phase = ENGINE_PUSHING;
-                render_invalidate_masks();
-                g_engine.dirty = 1;
-                fprintf(stderr, "engine: promoting queued icon=%d\n",
-                        g_engine.next.icon);
+                engine_promote_pending(now);
             } else {
                 g_engine.phase = ENGINE_IDLE;
-                /* Apply deferred perspective when settled */
-                if (g_persp_deferred) {
-                    render_set_perspective(g_persp_deferred_value);
-                    fprintf(stderr, "engine: applied deferred perspective=%s\n",
-                            g_persp_deferred_value ? "3D" : "2D");
-                    g_persp_deferred = 0;
-                    g_engine.dirty = 1;
-                }
-                /* Apply deferred bargraph when settled */
-                if (g_bargraph_deferred) {
-                    g_bargraph_level = g_bargraph_deferred_level;
-                    g_bargraph_on = g_bargraph_deferred_mode;
-                    if (g_bargraph_on == 2) {
-                        g_bargraph_blink_vis = 1;
-                        g_bargraph_blink_timer = 0;
-                    }
-                    g_bargraph_deferred = 0;
-                    g_engine.dirty = 1;
-                }
             }
         }
         break;
     case ENGINE_IDLE:
         break;
     }
+    if (g_engine.phase == ENGINE_IDLE) engine_apply_presentation();
 }
 
 /* ================================================================
@@ -313,8 +398,19 @@ static void save_screenshot(int fb_w, int fb_h, const char *label) {
  * ================================================================ */
 
 int main(int argc, char **argv) {
-    (void)argc;
-    (void)argv;
+    int port=CR_TCP_PORT, arg;
+    for(arg=1;arg<argc;arg++) {
+        if(!strncmp(argv[arg],"--port=",7)) {
+            char *end; long parsed=strtol(argv[arg]+7,&end,10);
+            if(end==argv[arg]+7 || *end || parsed<1 || parsed>65535) {
+                fprintf(stderr,"Invalid renderer port\n"); return 2;
+            }
+            port=(int)parsed;
+        } else {
+            fprintf(stderr,"Usage: %s [--port=1..65535]\n",argv[0]);
+            return 2;
+        }
+    }
 #ifdef SIGPIPE
     signal(SIGPIPE, SIG_IGN);
 #endif
@@ -353,7 +449,7 @@ int main(int argc, char **argv) {
 
     /* Initialize TCP server FIRST so Java can connect while display inits.
      * If server fails, nothing works — exit immediately. */
-    if (cr_server_init(CR_TCP_PORT) < 0) {
+    if (cr_server_init(port) < 0) {
         fprintf(stderr, "maneuver_render: server init failed\n");
         return 1;
     }
@@ -368,6 +464,10 @@ int main(int argc, char **argv) {
     platform_get_framebuffer_size(&fb_w, &fb_h);
     fprintf(stderr, "maneuver_render: framebuffer %dx%d\n", fb_w, fb_h);
 
+    maneuver_scene_provider_t provider={0};
+    provider.handles=scene_handles;provider.build_route=scene_route;
+    provider.paint_masks=scene_paint;provider.elevation=scene_elevation;
+    cr_scene_configure_provider(&provider);maneuver_set_scene_provider(&provider);
     if (render_init(fb_w, fb_h) < 0) {
         fprintf(stderr, "maneuver_render: render init failed\n");
         platform_shutdown();
@@ -383,29 +483,20 @@ int main(int argc, char **argv) {
 #ifdef CR_DEBUG_GRID
     render_set_debug_grid(1);
 #endif
-    /* Crop-outline overlay for on-car tuning; off unless asked for. */
-    {
-        const char *o = getenv("CR_CROP_OUTLINE");
-        const char *r = getenv("CR_CROP_RECT");
-        if (r && r[0]) {
-            int x, y, w, h;
-            if (sscanf(r, "%d,%d,%d,%d", &x, &y, &w, &h) == 4)
-                render_set_crop_rect(x, y, w, h);
-            else
-                fprintf(stderr, "maneuver_render: bad CR_CROP_RECT '%s', want x,y,w,h\n", r);
-        }
-        if (o && o[0] && o[0] != '0') {
-            render_set_crop_outline(1);
-            fprintf(stderr, "maneuver_render: crop outline ON%s\n",
-                    (r && r[0]) ? " (custom rect)" : "");
-        }
-    }
-
     /* Engine always has a deterministic hidden FOLLOW_STREET frame. */
     memset(&g_engine, 0, sizeof(g_engine));
+    g_engine.current_scene=cr_scene_create();g_engine.next_scene=cr_scene_create();
+    g_lane_panel=cr_lane_panel_create();
+    if(!g_lane_panel)fprintf(stderr,"lanes: panel allocation failed\n");
+    if(!g_engine.current_scene || !g_engine.next_scene) {
+        fprintf(stderr,"scene: allocation failed; retaining ordinary renderer\n");
+        cr_scene_destroy(g_engine.current_scene);cr_scene_destroy(g_engine.next_scene);
+        g_engine.current_scene=g_engine.next_scene=NULL; maneuver_set_scene_provider(NULL);
+    }
+    { extern float g_3d_offset_adjust;g_3d_offset_adjust=-.16f; }
     clear_maneuver();
 
-    fprintf(stderr, "maneuver_render: ready, waiting for commands on :%d\n", CR_TCP_PORT);
+    fprintf(stderr, "maneuver_render: ready, waiting for commands on :%d\n", port);
     cr_server_mark_ready();
 
     int dirty = 1;
@@ -428,7 +519,8 @@ int main(int argc, char **argv) {
 
     while (running && !platform_should_close()) {
         struct timespec t_start;
-        g_loop_progress++;
+        watch_stage(WATCH_POLL);
+        __sync_fetch_and_add(&g_loop_progress, 1);
         clock_gettime(CLOCK_MONOTONIC, &t_start);
 #ifdef CR_DIAG_FRAME_LOG
         stat_loop_iters++;
@@ -440,6 +532,7 @@ int main(int argc, char **argv) {
         clock_gettime(CLOCK_MONOTONIC, &t_after_pp);
 #endif
 
+        watch_stage(WATCH_POLL);
         cr_server_poll();
 #ifdef CR_DIAG_FRAME_LOG
         struct timespec t_after_sp;
@@ -463,22 +556,35 @@ int main(int argc, char **argv) {
         maneuver_state_t pending_maneuver;
         uint8_t pending_flags = 0;
         uint8_t pending_perspective = 1;
-        uint8_t pending_bargraph_level = 0;
-        uint8_t pending_bargraph_mode = 0;
+        int got_progress=0, progress_level=0, progress_mode=0;
+        int progress_state=CR_PROGRESS_OFF;
+        double progress_now=(double)t_start.tv_sec+t_start.tv_nsec*1e-9;
         int got_screenshot = 0;
         char screenshot_label[17];
 
+        watch_stage(WATCH_COMMANDS);
         while (cr_server_read_cmd(&cmd)) {
 #ifdef CR_DIAG_FRAME_LOG
             stat_cmds_received++;
 #endif
+            if (cmd.cmd == CMD_LANES_BEGIN || cmd.cmd == CMD_LANES_LANE || cmd.cmd == CMD_LANES_COMMIT) {
+                if (cr_lane_receive(&g_lane_decoder, &cmd, &g_lane_guidance)) {
+                    g_engine.dirty=1;
+                    fprintf(stderr, "lanes: event=%d showing=%d count=%d complete=%d\n",
+                        (int)g_lane_guidance.event_index, g_lane_guidance.showing,
+                        g_lane_guidance.count, g_lane_guidance.complete);
+                }
+                continue;
+            }
             switch (cmd.cmd) {
             case CMD_MANEUVER: {
-                decode_maneuver(&cmd, &pending_maneuver);
-                pending_flags = cmd.flags;
+                cr_decode_maneuver(&cmd, &pending_maneuver);
+                pending_flags = cr_merge_maneuver_flags(got_maneuver, pending_flags, cmd.flags);
                 pending_perspective = cmd.payload[43];
-                pending_bargraph_level = cmd.payload[44];
-                pending_bargraph_mode = cmd.payload[45];
+                got_progress=1;
+                progress_level=(cmd.flags & MAN_FLAG_PROGRESS) ? cmd.payload[44] : 0;
+                progress_mode=(cmd.flags & MAN_FLAG_PROGRESS) ? cmd.payload[45] : 0;
+                progress_state=cr_progress_decode(cmd.flags,cmd.payload[42],progress_mode);
                 got_maneuver = 1;
                 break;
             }
@@ -488,6 +594,13 @@ int main(int argc, char **argv) {
                 screenshot_label[16] = '\0';
                 break;
             }
+            case CMD_VISIBLE_AREA:
+                if (render_set_visible_area((cmd.payload[0] << 8) | cmd.payload[1],
+                        (cmd.payload[2] << 8) | cmd.payload[3],
+                        (cmd.payload[4] << 8) | cmd.payload[5],
+                        (cmd.payload[6] << 8) | cmd.payload[7]))
+                    g_engine.dirty = 1;
+                break;
             case CMD_PERSPECTIVE: {
                 int persp = cmd.payload[0] ? 1 : 0;
                 render_set_perspective(persp);
@@ -517,22 +630,15 @@ int main(int argc, char **argv) {
                 }
                 g_engine.dirty = 1;
                 break;
-            case CMD_BARGRAPH:
-                g_bargraph_level = cmd.payload[0];
-                if (g_bargraph_level > 16) g_bargraph_level = 16;
-                g_bargraph_on = cmd.payload[1];  /* 0=off, 1=on, 2=blink */
-                if (g_bargraph_on > 2) g_bargraph_on = 1;
-                if (g_bargraph_on == 2) {
-                    g_bargraph_blink_vis = 1;
-                    g_bargraph_blink_timer = 0;
-                }
-                g_engine.dirty = 1;
-                fprintf(stderr, "engine: bargraph level=%d on=%d\n",
-                        g_bargraph_level, g_bargraph_on);
+            case CMD_PROGRESS:
+                got_progress=1;
+                progress_level=cmd.payload[0]; progress_mode=cmd.payload[1];
+                progress_state=cr_progress_decode(cmd.flags,cmd.payload[2],progress_mode);
                 break;
             case CMD_CLEAR:
                 /* CLEAR wins over an earlier MANEUVER drained in this same loop. */
                 got_maneuver = 0;
+                got_progress=0;
                 clear_maneuver();
                 announced_first_frame = 0;
                 cr_server_clear_frame_ready();
@@ -550,8 +656,10 @@ int main(int argc, char **argv) {
         }
 
         /* Apply the latest maneuver (draining to latest) */
+        watch_stage(WATCH_ENGINE);
         if (got_maneuver) {
             int reveal_from_clear = g_cleared;
+            if (reveal_from_clear) cr_progress_reset(&g_arrow);
             if (g_cleared) {
                 g_cleared = 0;
                 g_fade_alpha = 0.0f;
@@ -563,13 +671,6 @@ int main(int argc, char **argv) {
                 g_persp_deferred_value = pending_perspective ? 1 : 0;
                 fprintf(stderr, "engine: deferred perspective=%s\n",
                         g_persp_deferred_value ? "3D" : "2D");
-            }
-            if (pending_flags & MAN_FLAG_BARGRAPH) {
-                g_bargraph_deferred = 1;
-                g_bargraph_deferred_level = pending_bargraph_level;
-                if (g_bargraph_deferred_level > 16) g_bargraph_deferred_level = 16;
-                g_bargraph_deferred_mode = pending_bargraph_mode;
-                if (g_bargraph_deferred_mode > 2) g_bargraph_deferred_mode = 1;
             }
             if (reveal_from_clear) {
                 /* The hidden FOLLOW_STREET is only a deterministic backing
@@ -586,31 +687,29 @@ int main(int argc, char **argv) {
                 /* This direct reveal deliberately bypasses ENGINE_SLIDING_IN,
                  * whose settle edge normally consumes the deferred presentation
                  * fields.  Apply them here so the first real frame after CLEAR
-                 * carries the requested perspective and bargraph as well. */
-                if (g_persp_deferred) {
-                    render_set_perspective(g_persp_deferred_value);
-                    fprintf(stderr, "engine: applied reveal perspective=%s\n",
-                            g_persp_deferred_value ? "3D" : "2D");
-                    g_persp_deferred = 0;
-                }
-                if (g_bargraph_deferred) {
-                    g_bargraph_level = g_bargraph_deferred_level;
-                    g_bargraph_on = g_bargraph_deferred_mode;
-                    if (g_bargraph_on == 2) {
-                        g_bargraph_blink_vis = 1;
-                        g_bargraph_blink_timer = 0;
-                    }
-                    g_bargraph_deferred = 0;
-                }
+                 * carries the requested perspective as well. */
+                engine_apply_presentation();
                 fprintf(stderr, "engine: reveal from clear icon=%d\n",
                         pending_maneuver.icon);
+            } else if (pending_flags & MAN_FLAG_REFRESH) {
+                engine_refresh_maneuver(&pending_maneuver,progress_now);
             } else {
-                engine_apply_maneuver(&pending_maneuver);
+                engine_apply_maneuver(&pending_maneuver,progress_now);
             }
         }
 
+        if(got_progress) {
+            engine_set_progress(progress_level,progress_state,progress_now);
+            /* TCP order wins, including PROGRESS after MANEUVER in one drain.
+             * Never let the maneuver's deferred snapshot rewind a newer tick. */
+            g_engine.dirty=1;
+        }
+        if(cr_progress_tick(&g_arrow,progress_now)) g_engine.dirty=1;
+
         /* Tick engine state machine */
-        engine_tick();
+        prepare_engine_scenes();
+        engine_tick(progress_now);
+        prepare_engine_scenes();
 
         /* Update framebuffer size (HiDPI) */
         int new_w, new_h;
@@ -634,38 +733,25 @@ int main(int argc, char **argv) {
         }
 
         /* Render if needed */
+        cr_rect_t panel_target;
+        render_get_visible_area(NULL,&panel_target);
+        watch_stage(WATCH_LANE_UPDATE);
+        if(cr_lane_panel_update(g_lane_panel,&g_lane_guidance,panel_target.w,progress_now))
+            g_engine.dirty=1;
+        float content_frame[3];
+        watch_stage(WATCH_LANE_FRAMING);
+        cr_lane_panel_framing(g_lane_panel,g_engine.current_scene,
+                             g_engine.has_next?g_engine.next_scene:NULL,content_frame);
+        render_set_content_framing(content_frame[0],content_frame[1],content_frame[2]);
+        watch_stage(WATCH_IDLE);
         if (g_engine.dirty || render_is_animating() || maneuver_needs_redraw() || got_screenshot
-            || render_crop_outline_enabled()   /* keep the tuning overlay on screen while idle */
+            || cr_lane_panel_animating(g_lane_panel,progress_now)
 #ifdef CR_DEBUG_GRID
             || 1  /* always render when grid is compiled in */
 #endif
            )
             dirty = 1;
         g_engine.dirty = 0;
-
-        /* Bargraph alpha fade */
-        {
-            float target = (g_bargraph_on > 0) ? 1.0f : 0.0f;
-            if (g_bargraph_alpha < target) {
-                g_bargraph_alpha += BARGRAPH_FADE_SPEED;
-                if (g_bargraph_alpha > target) g_bargraph_alpha = target;
-                dirty = 1;
-            } else if (g_bargraph_alpha > target) {
-                g_bargraph_alpha -= BARGRAPH_FADE_SPEED;
-                if (g_bargraph_alpha < target) g_bargraph_alpha = target;
-                dirty = 1;
-            }
-        }
-
-        /* Bargraph blink tick */
-        if (g_bargraph_on == 2) {
-            g_bargraph_blink_timer++;
-            if (g_bargraph_blink_timer >= BARGRAPH_BLINK_FRAMES) {
-                g_bargraph_blink_timer = 0;
-                g_bargraph_blink_vis = !g_bargraph_blink_vis;
-                dirty = 1;
-            }
-        }
 
         int rendered_this_frame = 0;
         if (dirty) {
@@ -676,33 +762,39 @@ int main(int argc, char **argv) {
 #endif
 
             maneuver_state_t *next_ptr = g_engine.has_next ? &g_engine.next : NULL;
+            watch_stage(WATCH_PREPARE);
             maneuver_prepare_frame(&g_engine.current, next_ptr);
 #ifdef CR_DIAG_FRAME_LOG
             struct timespec t_after_prep;
             clock_gettime(CLOCK_MONOTONIC, &t_after_prep);
 #endif
 
+            render_set_route_progress(g_arrow.fill,g_arrow.path_weight,g_arrow.glow);
+            watch_stage(WATCH_BEGIN_FRAME);
             render_begin_frame();
+            watch_stage(WATCH_SCENE_DRAW);
             maneuver_draw(&g_engine.current, next_ptr);
-            if (g_bargraph_alpha > 0.0f) {
-                float ba = g_bargraph_alpha * g_fade_alpha;
-                int bl = g_bargraph_level;
-                if (g_bargraph_on == 2)
-                    bl = g_bargraph_blink_vis ? 16 : 0;  /* blink: full ↔ empty */
-                render_bargraph(bl, ba);
-            }
+            cr_rect_t panel_visible;
+            render_get_visible_area(&panel_visible,NULL);
+            watch_stage(WATCH_LANE_DRAW);
+            cr_lane_panel_draw(g_lane_panel,panel_visible,progress_now);
+            watch_stage(WATCH_IDLE);
             render_debug_grid();
-            render_crop_outline();
+            watch_stage(WATCH_END_FRAME);
             render_end_frame();
+            watch_stage(WATCH_IDLE);
 #ifdef CR_DIAG_FRAME_LOG
             struct timespec t_after_draw;
             clock_gettime(CLOCK_MONOTONIC, &t_after_draw);
 #endif
 
+            watch_stage(WATCH_SCREENSHOT);
             if (got_screenshot)
                 save_screenshot(fb_w, fb_h, screenshot_label);
 
+            watch_stage(WATCH_SWAP);
             int swap_ok = platform_swap();
+            watch_stage(WATCH_IDLE);
             if (!swap_ok) {
                 /* platform_swap recreated the QNX surface.  Repaint it on the
                  * next iteration even when the engine is otherwise idle.  Also
@@ -771,8 +863,8 @@ int main(int argc, char **argv) {
 #endif /* CR_DIAG_FRAME_LOG */
 
             dirty = render_is_animating() || maneuver_needs_redraw() || g_fade_active
-                 || g_bargraph_on == 2
-                 || (g_bargraph_alpha > 0.0f && g_bargraph_alpha < 1.0f);
+                 || cr_lane_panel_animating(g_lane_panel,progress_now)
+                 || g_arrow.active || g_arrow.tint_active;
         }
 
         /* dmdt focus watchdog: spawn one-shot detached thread to run
@@ -796,20 +888,21 @@ int main(int argc, char **argv) {
          * for full RE-derived rationale):
          *   1. Our screen_window struct invalidated cross-process — the
          *      probe screen_get_window_property_iv returns ENOENT/EBADF/EINVAL.
-         *   2. displaymanager moved our window out of its managed group
-         *      (m_surfaceSources[20] now points to a foreign window, e.g.
-         *      native nav's libRenderSystem) — our SCREEN_PROPERTY_MANAGER_STRING
-         *      no longer matches "All your base are belong to us!".
+         *   2. displaymanager disowned our managed window (m_surfaceSources[98]
+         *      no longer holds it, e.g. the context switched away) — our
+         *      SCREEN_PROPERTY_MANAGER_STRING no longer matches "All your base
+         *      are belong to us!".  With our own id 98 there is no stock
+         *      collision, so this is rare.
          *
-         * On either signal, the helper tears down our EGL surface, calls
-         * display_create_window again to register a fresh ID="20" with
-         * displaymanager, and recreates the EGL surface.  100 ms backoff
-         * inside the helper prevents flapping. */
+         * On either signal, cluster_surface recreates the managed window (id 98,
+         * 100 ms backoff inside) and platform_recreate_window re-binds EGL. */
         {
             static struct timespec health_last = {0, 0};
             if (timespec_elapsed_at_least(&t_start, &health_last, 5, 0)) {
                 health_last = t_start;
+                watch_stage(WATCH_WINDOW_PROBE);
                 platform_check_and_recover_window();
+                watch_stage(WATCH_IDLE);
             }
         }
 
@@ -832,12 +925,14 @@ int main(int argc, char **argv) {
             static struct timespec hb_last = {0, 0};
             if (timespec_elapsed_at_least(&t_start, &hb_last, 1, 0)) {
                 hb_last = t_start;
+                watch_stage(WATCH_HEARTBEAT);
                 cr_server_send_heartbeat();
+                watch_stage(WATCH_IDLE);
             }
         }
 
-        /* Adaptive IDLE pacing (proven approach from the renderer history, commit e26cce5).
-         * ACTIVE 30 FPS pacing rides eglSwapBuffers (QNX: eglSwapInterval(2); macOS below) — NEVER
+        /* Adaptive IDLE pacing (proven approach from the c_render history, commit e26cce5).
+         * ACTIVE output pacing rides eglSwapBuffers (QNX: eglSwapInterval(2); macOS below) — NEVER
          * nanosleep, because nanosleep on QNX 6.5 rounds up to the kernel timer tick and won't hold
          * a precise 30 Hz.  But when the loop produced NO frame this iteration (idle: no route / no
          * maneuver) there is no swap to pace it, so an always-on renderer would busy-spin 100% CPU.
@@ -853,12 +948,14 @@ int main(int argc, char **argv) {
                          : (idle_frames < TARGET_FPS * 5) ? 100L * 1000000L  /* 1–5 s: 10 Hz */
                          :                                  333L * 1000000L; /* >5 s: 3 Hz  */
             struct timespec ts = { idle_ns / 1000000000L, idle_ns % 1000000000L };
+            watch_stage(WATCH_SLEEP);
             nanosleep(&ts, NULL);
+            watch_stage(WATCH_IDLE);
         }
 
 #ifndef PLATFORM_QNX
         /* macOS/dev only: GLFW swap interval 0 gives no vsync throttle, so pace ACTIVE frames to
-         * 30 FPS here.  (On QNX the swap itself blocks on eglSwapInterval(2) — no timer rounding.) */
+         * 30 FPS here. QNX requests interval 2 on each surface; MOST capture has its own clock. */
         if (rendered_this_frame) {
             struct timespec t_end;
             clock_gettime(CLOCK_MONOTONIC, &t_end);
@@ -867,7 +964,9 @@ int main(int argc, char **argv) {
             long sleep_ns = FRAME_TIME_NS - elapsed_ns;
             if (sleep_ns > 0) {
                 struct timespec ts = { sleep_ns / 1000000000L, sleep_ns % 1000000000L };
+                watch_stage(WATCH_SLEEP);
                 nanosleep(&ts, NULL);
+                watch_stage(WATCH_IDLE);
             }
         }
 #else
@@ -903,9 +1002,13 @@ int main(int argc, char **argv) {
             }
         }
 #endif /* CR_DIAG_FRAME_LOG */
+        watch_stage(WATCH_IDLE);
     }
 
     cr_server_shutdown();
+    maneuver_set_scene_provider(NULL);
+    cr_scene_destroy(g_engine.current_scene);cr_scene_destroy(g_engine.next_scene);
+    cr_lane_panel_destroy(g_lane_panel);
     render_shutdown();
     platform_shutdown();
     g_renderer_running = 0;

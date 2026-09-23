@@ -6,7 +6,7 @@
 #define CLUSTER_SURFACE_H
 /*
  * cluster_surface — shared managed-window primitive for the MHI2Q cluster
- * renderer (maneuver_render = GL overlay).
+ * renderers (maneuver_render = GL overlay, altscreen_render = OMX video).
  *
  * Both open ONE QNX Screen window and hand it to the DisplayManager as a managed
  * client (screen_manage_window into the "How are you gentlemen?" group) under a
@@ -18,7 +18,7 @@
  * The one lifecycle concern is disown recovery: the DM owns our window and can
  * disown it on context transitions (it stamps SCREEN_PROPERTY_MANAGER_STRING).
  * cluster_surface_lost() detects loss/disown so the caller can rebuild its
- * EGL surface on a freshly recreated window.
+ * EGL/OMX surface on a freshly recreated window.
  *
  * Group/manager strings verified by RE:
  *   libdisplayinit.so  display_create_window → screen_manage_window(win,"How are you gentlemen?")
@@ -40,12 +40,12 @@ typedef struct cluster_surface cluster_surface_t;
 /* Create screen context + managed window + buffers.  NULL on failure. */
 cluster_surface_t *cluster_surface_create(const cluster_surface_cfg *cfg);
 
-/* Native handles for the caller's pixel pipeline (eglCreateWindowSurface). */
+/* Native handles for the caller's pixel pipeline (eglCreateWindowSurface / OMX). */
 screen_window_t    cluster_surface_window(cluster_surface_t *s);
 screen_context_t   cluster_surface_context(cluster_surface_t *s);
 
 /* Cheap health probe (~every 5 s): 1 = window lost/disowned → caller should tear
- * down its EGL surface, call cluster_surface_recreate(), then rebind. */
+ * down its EGL/OMX surface, call cluster_surface_recreate(), then rebind. */
 int  cluster_surface_lost(cluster_surface_t *s);
 
 /* Destroy the window and open a fresh managed one (same cfg).  Caller rebinds its
