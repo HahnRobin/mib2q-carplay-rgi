@@ -95,7 +95,8 @@ flowchart LR
 ./scripts/build_renderers.sh   # -> build/maneuver_render      (qnx65-armv7-toolchain Docker)
 ```
 
-All three build in Docker - no host toolchain. No Java variants; `java_patch/` builds directly to the
+All three build in Docker - no host toolchain. The `qnx65-armv7-toolchain` image is built once from
+[luka-dev/qnx65-armv7-toolchain](https://github.com/luka-dev/qnx65-armv7-toolchain) (`./host-scripts/qnx-run.sh build`). No Java variants; `java_patch/` builds directly to the
 jar, and `java_resources/` (the `vc-text.bin` glyph/Unicode table) is copied in before `jar cf`. The
 renderer's `scene/` is C++11 compiled with the image's `g++` into `build/libmaneuver_scene.a` (no C++
 runtime allowed). The native builds synthesize import stubs; the resulting ELF binds the unit's real
