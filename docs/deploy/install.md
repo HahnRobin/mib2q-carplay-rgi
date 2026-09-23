@@ -222,8 +222,8 @@ block runs `dio_manager` directly; ours runs `carplay_startup.sh`, which scopes 
 },
 ```
 
-**`dio_manager.json`**: append the five route-guidance IDs at the end of the two lists. On a stock
-MU1316 P5087 unit the two lines change like this:
+**`dio_manager.json`**: append the five route-guidance IDs at the end of the two lists. The stock lists
+are the same on every unit, so the two lines change like this:
 
 ```json
 before:
@@ -235,8 +235,7 @@ after:
 "MessagesReceivedFromDevice":["0x4E09", "0x4E0A", "0x4E0C", "0x5001", "0xAE01", "0x4155", "0x4158", "0xFFFA", "0xFFFC", "0x4C01", "0x4C04", "0x5201", "0x5202", "0x5204"],
 ```
 
-Other firmware may list different stock IDs; only the five appended ones matter. The file carries `##`
-comment lines, so edit it as text and never run it through a JSON tool.
+The file carries `##` comment lines, so edit it as text and never run it through a JSON tool.
 
 ### 4. Flush and reboot
 
