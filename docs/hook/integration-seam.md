@@ -5,6 +5,9 @@ status: verified-source
 sources:
   - code: hook/main.c
   - code: hook/framework/hook_framework.c
+  - code: hook/carplay_hook.exports.map
+  - code: scripts/build_hook.sh
+  - code: hook/framework/signal_guard.c
   - code: hook/coverart/coverart_hook.c
   - code: java_patch/com/luka/carplay/core/CarPlayApp.java
   - code: java_patch/com/luka/carplay/core/ScreenModule.java
@@ -31,9 +34,7 @@ flowchart LR
         setup["AirPlayReceiverSessionSetup<br/>streams 100/101/110"]
         link["Cinemo iAP2 link state machine"]
     end
-    subgraph seam["LD_PRELOAD interposes (PLT/GOT seams)"]
-        info["AirPlayCopyServerInfo -> /info"]
-        s2["...SessionSetup / TearDown / NightMode"]
+    subgraph seam["LD_PRELOAD interposes (the 5 exported symbols)"]
         dec["NmeIAP2Message::Decode / Encode"]
         tx["NmeTransport::Send / Recv"]
         iap["CinemoCreateIAP -> ICinemoIAP"]
@@ -62,8 +63,11 @@ for this binary. Correct rule: **classify each callsite as PLT/GOT (interposable
 - `AirPlayReceiverSessionSetup` / `...TearDown` / `...SetNightMode` - interposable; the last is a genuine dio->libairplay boundary.
 - `CinemoCreateIAP` - genuine dio->Cinemo (libNmeSDK) boundary.
 
-The hook interposes exactly this class of symbol (`Decode`/`Encode`/`NmeTransport::Send`/`Recv`/
-`CinemoCreateIAP`, resolved via `RTLD_NEXT`) - consistent with current `hook_framework.c`. [x]
+The hook interposes exactly this class of symbol and nothing else: `CinemoCreateIAP`,
+`NmeIAP2Message::Decode`/`Encode` and `NmeTransport::Send`/`Recv`, resolved via `RTLD_NEXT`. These five
+are the **only** dynamic exports (see the export surface below). The AirPlay seams above are RE facts
+about stock; this branch interposes none of them (the `hook_airplay_seams_t` callback struct in
+`hook_framework.h` is present but has no implementation here). [x]
 
 **Stock SETUP behaviour (re-notes):** `AirPlayReceiverSessionSetup` handles stream types 100/101/110;
 type **111 hits the unsupported branch**. The hook is therefore not shadowing hidden stock altScreen
@@ -125,7 +129,7 @@ support - it supplies a genuinely absent case. *(RE-derived; not re-checkable fr
   reintroduced `rgd_module_init`/`rgd_module_fini` and requires `.init_array` to be exactly four bytes
   (the compiler's `frame_dummy` entry only). The one-time WARN
   `lazy runtime init complete (constructor-free; first Cinemo boundary)` is the live boundary marker.
-  Fresh standalone artifact: `build/libcarplay_hook.so`, SHA-256
+  The standalone artifact of that fix (since superseded by later builds) had SHA-256
   `1dfee4db2d3ff836e518bd53b0adfd3652b0ba1fa112f37390fc4a9f55feedcb`.
 - **FIXED - eager cover-art constructor** [x] (confirmed resolved on this branch). Cover art declares
   its `NmeTransport::Recv` tap in its module def; the framework runs its `pthread_once`-backed
@@ -135,9 +139,17 @@ support - it supplies a genuinely absent case. *(RE-derived; not re-checkable fr
   the bus, which was always the real barrier (an unregister could never stop a caller that had already
   copied the function pointer). Helper processes stay fully inert (gated on
   `hook_process_is_dio_manager`).
-- **P2 - excessive ELF export surface** (!) **open.** No `-fvisibility=hidden` / version-script in the
-  hook build; the object still exports far more than the intended interposes. Every exported helper is a
-  future accidental-preemption surface.
+- **FIXED - ELF export surface** [x]. The hook compiles with `-fvisibility=hidden` and links with
+  `hook/carplay_hook.exports.map` (`global:` the 5 interposers above, `local: *`). `build_hook.sh` diffs
+  `nm -D --defined-only` against that allowlist and **rejects the build** on any difference, alongside
+  the emutls, `.init_array == 4 bytes` and no-`rgd_module_init/fini` checks. No helper can preempt a stock
+  symbol by accident.
+- **FIXED - host signal dispositions** [x]. The bus's `SIGPIPE` ignore and fault-signal diagnostics go
+  through `signal_guard`, which saves `dio_manager`'s previous `sigaction`s, chains fault signals to
+  them, and restores them on shutdown; control signals stay untouched - see [[bus-protocol]].
+- **State trace** - `framework/state_trace.c` (generation-scoped startup trace of iAP2/transport
+  markers) is compiled out unless `ENABLE_STATE_TRACE=1`; `build_hook.sh` never sets it, so shipping
+  builds carry only inline no-op stubs.
 - **P2 - fail-open process gate** (!) **open in code** (mitigated). `hook_process_is_dio_manager()` returns
   **true** when `/proc/self/cmdline` can't be opened/read (fail-open). Mitigated because the startup
   script restricts `LD_PRELOAD` to `dio_manager`; fail-closed would still be safer.
@@ -153,5 +165,6 @@ Java outer-class ABI is preserved, and `LD_PRELOAD` is confined to `dio_manager`
 logger are now constructor-free**, and the eager cover-art loader thread is gone. The two section 6
 re-notes that no longer match code
 (`videoAvailable` intent term, and the map-scale sentinel) have both been **simplified out** on this
-branch. Remaining non-altScreen work is bounded hardening: ELF visibility, fail-closing the process
-gate, tightening `g_fw.ctx` locking, and the supervisor 2 s ownership margin.
+branch. The export surface is now an enforced 5-symbol allowlist. Remaining non-altScreen work is bounded
+hardening: fail-closing the process gate, tightening `g_fw.ctx` locking, and the supervisor 2 s
+ownership margin.

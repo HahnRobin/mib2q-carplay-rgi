@@ -4,6 +4,8 @@ tags: [cluster, kdk, geometry, verified]
 status: verified-source
 sources:
   - code: java_patch/com/luka/carplay/cluster/ClusterLayerController.java
+  - code: java_patch/de/audi/tghu/navi/app/cluster/ScreenCombiBAPListener.java
+  - code: java_patch/de/esolutions/hmi/widgets/audi/evo/high/widgets/CombiMapController.java
   - firmware: LayoutMIB2HighB9 / B9Sport / Q7 (Layout.getIntegerConstant)
   - firmware: VC AU491 gtf2 (SV_LVDS_KDK)
 reconciles:
@@ -18,7 +20,8 @@ Where the maneuver overlay (98) and its KDK backing sit on the cluster, and who 
 ## Context
 
 > [[display-contexts]] - ctx 80 planes -> **kdk-geometry** - position/crop 98 + 101/102.
-> Applied by `ClusterLayerController.reapply()` on every context switch / view-size change.
+> Applied by `ClusterLayerController.reapply()` on every stock KDK model update, VC FctID 44/54 input
+> and CarPlay context change.
 
 ## The VC obeys; the HU dictates
 
@@ -51,12 +54,27 @@ Classic overrides **only** 58/59/60/61; everything else falls through to Q7.
 | 108 / 109 | map origin (displayables 33, 58) | 0, 26 | 0, 26 |
 | 80 / 81 | small-stage map offset | 0, 0 (Q7) | -476, 0 |
 
-## Stages
+## Stages & visibility (VC-driven)
 
-- **Backing 101** = sport 328x180 stage; **backing 102** = popup 210x153 stage.
-- Stage selection follows the Audi View button (`NAV_VIEW_SIZE_CHOICE`): `popup = !small-stage`.
-  `ClusterLayerController` re-applies the crop/anchor for plane 98 and its backing on every switch,
-  and the maneuver plane carries the stage's crop so it follows the map.
+- **Backing 101** = sport/in-tube 328x180 stage; **backing 102** = popup 210x153 stage.
+- **Stage** - while CarPlay owns the cluster it follows **VC FctID 54** (`setMapPresentation(
+  largeMapView, ...)` -> `onVcPresentation`, emitted at the VC's stage-animation midpoint): popup =
+  `largeMapView`. Before the first FctID 54 (and outside CarPlay) the stock KDK hint is used
+  (`popup = !inTube`). The Audi View button (`NAV_VIEW_SIZE_CHOICE`) is the map's full/small axis, not
+  the KDK stage.
+- **Visibility** - opacity follows **VC FctID 44** (`updateMapVisibility` -> `onVcVisibility`):
+  100 when the VC reports the KDK visible, 0 otherwise; the stock KDK visible/opacity hint is used only
+  until the first FctID 44. The requested View mode never reveals a layer.
+- `ScreenCombiBAPListener` forwards both **before** stock sends its Status acknowledgement, so the HU
+  plane and the VC animation start together.
+- **Eligibility** - 98 and its backing are opaque only while `ScreenModule.isConnected() && isNavActive()`;
+  the other backing is always 0. Outside CarPlay the cached stock values are restored on 101/102 and 98
+  is 0, so Audi navigation's KDK never stays transparent after a disconnect.
+- Plane 98 gets the stage's crop (`setCropping`, src = crop, dst = anchor), the backing gets the anchor
+  (`setPosition`). `maneuverViewport()` returns the same crop to the renderer ([[maneuver-renderer]]).
+- Geometry comes from the terminal's live stock `Layout` (`updateLayout`), cached as primitives; a
+  fallback Sport table is used only before the first stock model update. Every distinct decision is
+  logged once (`ClusterLayers apply ...`).
 
 ## (!) Do NOT apply the small-stage offset (80/81) to the KDK panel
 

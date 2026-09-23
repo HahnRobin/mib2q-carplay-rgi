@@ -5,6 +5,7 @@ status: verified-source
 sources:
   - code: hook/framework/bus_protocol.h
   - code: hook/framework/bus.c
+  - code: hook/framework/signal_guard.c
   - code: java_patch/com/luka/carplay/bus/CarplayBus.java
 ---
 
@@ -36,17 +37,41 @@ No application heartbeat on this leg - Java relies on TCP FIN/RST + `setKeepAliv
 | 16 | ... | payload |
 
 - **BINARY** (`0x02`) - packed struct; otherwise payload is text `key:type:value` lines.
-- **STICKY** (`0x01`) - server caches the **latest** frame per type and replays it to a new client on
-  `CMD_SYNC_REQ`, bracketed by `EVT_SYNC_BEGIN`/`EVT_SYNC_END`; replays carry **REPLAY** (`0x04`) and a
-  server-reassigned seq. Non-sticky frames are fire-and-forget (new clients see only new ones).
+- **STICKY** (`0x01`) - the **hook** caches the latest frame per type and replays the snapshot, bracketed
+  by `EVT_SYNC_BEGIN`/`EVT_SYNC_END`, right after `EVT_HELLO` on every (re)connect and again on
+  `CMD_SYNC_REQ`. Replays carry **REPLAY** (`0x04`) and a fresh seq (`begin < replay < end`). Non-sticky
+  frames are fire-and-forget. If copying a new frame fails, the previous cache entry is kept.
+- Types are a direct-indexed table below `MAX_TYPES = 0x0120`, identical in `bus.c` and
+  `CarplayBus.java` (checked by `scripts/check_local_protocols.py`).
 
 ## Direction
 
 - **EVT_*** hook->Java: `EVT_RGD_UPDATE` (0x0020), `EVT_COVERART` (0x0010), `EVT_HELLO`, sync markers.
-- **CMD_*** Java->hook: `CMD_SYNC_REQ` (0x0100) requests a sticky snapshot.
+- **CMD_*** Java->hook: `CMD_SYNC_REQ` (0x0100) requests a sticky snapshot. The `CMD_ALT_*` (0x0110-0x0116) defines in `bus_protocol.h` are altScreen leftovers with no
+  handler in this hook.
 
 ## Threads (hook side)
 
-`connector` (connect + retry, reconnect on any send/disconnect error) - `writer` (drains the outbound
-queue) - a 1 Hz `timer` driving `rgd_periodic_tick` (deferred `route_state=0` flush - see
-[[rgd-activation]]); the timer sends no application heartbeat.
+`connector` (connect + retry, HELLO + snapshot, then reads until the peer goes away) - `writer`
+(drains the outbound queue) - a 1 Hz `timer` driving `rgd_periodic_tick` (deferred `route_state=0`
+flush - see [[rgd-activation]]); the timer sends no application heartbeat.
+
+## Connection lifecycle (fd + generation)
+
+Every new connection bumps a **generation**. A queued frame is written only if the socket's `(fd,
+generation)` is still current, checked under the same locks that serialize frames and socket
+replacement, so a writer can never append to a replaced connection or a reused fd number. A failed
+write **retires** the connection (`shutdown(SHUT_RDWR)`) before another writer can add bytes to a
+partial frame; only the **connector** calls `close()`, after its last read, so a descriptor is never
+freed under a blocked `recv`. Shutdown first wakes blocked senders (`shutdown`), then lets the connector
+close. Fork children never tear down the parent's bus (owner PID).
+
+## Signal policy
+
+QNX io-pkt rejects `MSG_NOSIGNAL` (`ENOSYS`), so every hook socket write uses `flags = 0` and the bus
+ignores `SIGPIPE` while it is active. `bus_init` installs this through `signal_guard`: `SIGPIPE` ->
+`SIG_IGN`, and diagnostic handlers for `SIGSEGV/SIGBUS/SIGABRT/SIGILL/SIGFPE` that write one fixed line
+(async-signal-safe) and then **chain to `dio_manager`'s exact previous disposition**. The previous
+`sigaction`s are saved and restored on shutdown or a failed init; control signals
+(`SIGTERM/INT/QUIT/HUP/USR1/USR2`) are never touched. Host tests: `tests/signal_guard_test.c`,
+`tests/bus_transport_test.c` (`scripts/run_tests.sh`).

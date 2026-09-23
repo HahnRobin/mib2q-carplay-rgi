@@ -5,6 +5,8 @@ status: verified-decompile
 sources:
   - code: hook/routeguidance/rgd_tlv.h
   - code: hook/routeguidance/rgd_tlv.c
+  - code: hook/routeguidance/rgd_hook.c
+  - test: tests/rgd_tlv_test.c
   - firmware: accessoryd 23G71 +[ACCNavigationRouteGuidanceUpdateInfo keyForType:]
 reconciles:
   - docs/reference/NAVSD_FCTID_MATRIX.md
@@ -92,7 +94,27 @@ Every ID matches `+[ACCNavigationRouteGuidanceUpdateInfo keyForType:]` (accessor
 ## 0x5204 LaneGuidanceInformation
 
 `0x01` LaneGuidanceIndex - `0x02` LaneInformations (per-lane angle vectors) - `0x03` Description.
-Detail -> [[bap-fctids]] (FctID 24) and the renderer lane glyphs.
+Up to 8 lanes x 16 angles are kept. The parser also publishes `lgN_lane_complete` (bus key): `1` only
+when every nested lane-information TLV was consumed exactly and each lane carried both an index and a
+status; an overflow, a trailing byte or a missing field clears it. Detail -> [[lane-guidance]].
+
+## Whole-message validation
+
+`rgd_parse_update` / `rgd_parse_maneuver` / `rgd_parse_lane_guidance` return `bool`. Before any field
+is copied, `rgd_message_valid` checks the iAP2 header (`40 40`, length == frame length, msgid) and walks
+the complete TLV sequence (every `len >= 4` and inside the frame; the 0x5204 LaneInformations container
+is validated one level deeper). A malformed message is logged
+(`Ignored malformed RGD message 0x52xx`), handed back to stock dispatch unchanged, and **publishes no
+partial delta** - nothing reaches the slot caches or the bus. Unknown TLV IDs stay forward-compatible.
+Host test: `tests/rgd_tlv_test.c` (run by `scripts/run_tests.sh`).
+
+## Route generation
+
+`rgd_maneuver_map_reset` (native route reset) stamps a new `route_generation` from the monotonic clock
+(strictly increasing, so it survives a hook restart while Java stays alive). Every snapshot and the
+disconnect clear carry it; Java clears route and lane caches when it changes, so a new route that
+reuses slot versions never inherits the old route's fields - see [[rgd-activation]]. Hook and JAR must
+be deployed together: an older hook sends no `route_generation`.
 
 ## Gaps - Apple sends, we drop
 

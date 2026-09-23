@@ -1,64 +1,87 @@
 ---
-title: Bargraph fill & call-for-action blink
-tags: [rgd, bap, cluster, verified]
+title: Distance progress - BAP bargraph & arrow fill
+tags: [rgd, bap, cluster, renderer, verified]
 status: verified-source
 sources:
   - code: java_patch/com/luka/carplay/rgd/BAPBridge.java
+  - code: java_patch/com/luka/carplay/rgd/RendererServer.java
+  - code: maneuver_render/protocol.h
+  - code: maneuver_render/arrow_progress.h
+  - test: tests/DistanceBargraphChainTest.java
 reconciles:
   - docs/reference/NAVSD_FCTID_MATRIX.md
+  - mhi2-carplay docs/cluster-and-rgi/DISTANCE_BARGRAPH.md
 ---
 
-# Bargraph fill & call-for-action blink
+# Distance progress - BAP bargraph & arrow fill
 
-The next-maneuver distance bargraph (FctID 18) must fill continuously and blink at the maneuver
-point, but iOS sends `0x5202 ManeuverUpdate` only every ~1-3 s. `BAPBridge` smooths that with a
-distance->fill formula plus a dedicated blink thread.
+The next-maneuver distance progress has two outputs from one `BAPBridge` decision: the BAP
+**bargraph** in FctID 18 (drawn by the HUD / VC firmware) and the **fill of the maneuver arrow** in
+`maneuver_render`. The renderer no longer draws a separate bargraph column. iOS sends distance only
+every ~1-3 s, so the blink runs on its own 600 ms worker, shared by both outputs.
 
 ## Context
 
-> [[rgd-activation]] - active -> [[bap-fctids]] - FctID 18 -> **bargraph-sync** - fill + blink -> HUD
+> [[rgd-activation]] - active -> [[bap-fctids]] - FctID 18 -> **bargraph-sync** - bar + arrow fill ->
+> HUD / [[maneuver-renderer]]
 
-## Fill formula
+## Denominator & fill
 
-`linBargraph% = clamp(distM * 100 / prepareThreshold, 0, 100)`. The denominator is the prepare
-threshold for the maneuver class, so a long highway approach fills more gradually than a city one.
+`percent = distM * 100 / denominator` while `0 < distM <= denominator` (then `bargraphOn = true`).
+
+- **Prepare threshold** - city 1500 m, highway 3000 m; a step longer than 2000 m counts as highway.
+- **Denominator** - the step length `mDistance[idx]` (0x5202 TLV 0x05), **capped at 15 %** of the
+  prepare threshold (225 / 450 m). An unknown step length (`-1`/`0`, e.g. Google Maps never sends
+  TLV 0x05) or one above the cap uses the cap, so the bar still runs.
+- **Blink** - below 20 % the blink worker takes over.
 
 | Constant | Value | Meaning |
 |---|---:|---|
-| `CITY_PREPARE_THRESHOLD_M` | 1500 m | Approach denominator, city maneuver |
-| `HIGHWAY_PREPARE_THRESHOLD_M` | 3000 m | Approach denominator, highway maneuver |
-| `HIGHWAY_STEP_THRESHOLD_M` | 2000 m | distance above which a maneuver counts as highway-class |
-| `BARGRAPH_ACTION_PERCENT_OF_PREPARE` | 15 % | call-for-action arm point |
-| `BARGRAPH_BLINK_PERCENT` | 20 % | enter Blink phase below this fill |
-| `ACTION_BLINK_INTERVAL_MS` | 600 ms | blink toggle period (50 % duty) |
+| `CITY_PREPARE_THRESHOLD_M` | 1500 m | prepare threshold, city |
+| `HIGHWAY_PREPARE_THRESHOLD_M` | 3000 m | prepare threshold, highway |
+| `HIGHWAY_STEP_THRESHOLD_M` | 2000 m | step length above which a maneuver is highway-class |
+| `BARGRAPH_ACTION_PERCENT_OF_PREPARE` | 15 % | denominator cap (action zone) |
+| `BARGRAPH_BLINK_PERCENT` | 20 % | blink below this fill |
+| `ACTION_BLINK_INTERVAL_MS` | 600 ms | blink phase (50 % duty) |
 
-## Phases
+## One send, two outputs
 
-```mermaid
-stateDiagram-v2
-    direction LR
-    [*] --> Far: route active
-    Far --> Approach: distM <= prepareThreshold
-    Approach --> Blink: linBargraph% < 20
-    Blink --> Approach: dist/maneuver changed (>=20% again)
-    Approach --> Far: new maneuver (distance jumps up)
-    Blink --> Far: new maneuver
-    Far --> [*]: route stopped
-    Approach --> [*]: route stopped
-    Blink --> [*]: route stopped
-```
+`sendDistanceToManeuverRaw` formats the distance with the stock `BAPDistanceFormatter`, calls
+`AppConnectorNavi.updateDistanceToNextManeuver(value, unit, bargraphOn, percent)`, and only after BAP
+returned sends the renderer `CMD_PROGRESS` with `level = percent * 16 / 100`, `mode = bargraphOn`, and
+an explicit progress state. It is skipped while `rendererManeuverPending`, so progress for a new
+maneuver never lands on the old arrow. Lock order is `this -> distanceToManeuverLock -> renderer
+queue`, never inverted.
 
-## Blink thread
+## Blink worker
 
-A dedicated `BAPActionBlink` daemon (spawned only while a route is active) toggles the bargraph
-between 100 % and 0 % every 600 ms and re-sends FctID 18 (HUD) plus a `CMD_MANEUVER` tick to the
-renderer. This is **independent of iAP2 cadence**: even if iOS goes silent for 2 s the blink keeps
-animating in lock-step on HUD and renderer. A `generation` counter invalidates a stale thread on
-every start/stop so an old cycle can never double up the blink.
+`BAPActionBlink` (only while a route is active, invalidated by a `generation` counter on every
+start/stop) toggles percent 100 <-> 0 every 600 ms while the fill is below 20 %. Both phases keep
+`bargraphOn = true` and the positive distance. The renderer receives the **same phase**
+(`PROGRESS_BLINK_HIGH` / `PROGRESS_BLINK_LOW`), so HUD bar and arrow blink in lock-step independent of
+iAP2 cadence.
+
+## Renderer side
+
+`CMD_PROGRESS` (0x06): `payload[0]` remaining level 0-16 (16 = empty, 0 = full), `[1]` mode, `[2]`
+state `0 off / 1 fill / 2 blink low / 3 blink high` - the state byte is honoured only with packet flag
+**0x20**; without it mode 1 fills and anything else is off. The same fields ride on `CMD_MANEUVER`
+(`MAN_FLAG_PROGRESS` 0x02 -> `[44..45]`, flag 0x20 -> state in `[42]`). The wire clock owns the blink;
+`arrow_progress.h` only eases toward the received target (0.40 s retract). Blink low and off have exactly
+zero brightness. See [[maneuver-renderer]].
 
 ## FSG-sync workaround
 
 `sendStatusIfChanged` drops a BAP update when nothing in `{FctID 23, 18, 49}` changed. On every
-ManeuverDescriptor send, `BAPBridge` toggles the cosmetic `exitViewNum` variant on FctID 49 (Exitview)
-to force a transmission - without it the cluster occasionally misses bargraph ticks during a fast
-approach. FctID 49 is part of the FctSync member set, see [[bap-fctids]].
+descriptor send `BAPBridge` toggles the ExitView variant EU <-> NAR on FctID 49 with `exitViewNum = 0`
+(never 1 - that paints a highway-exit glyph over the icon), forcing a transmission so the FctSync
+window closes. See [[bap-fctids]].
+
+## VC shows the bar, not the number
+
+Host-proven (`tests/DistanceBargraphChainTest.java`, real `BAPBridge` + stock `AppConnectorNavi` +
+serializer): the FctID 18 payload carries a valid distance **and** the bargraph together. Whether the VC
+shows both is decided by the VC firmware, not the HU; the patched `ClusterService` only keeps the HU
+Java distance model (64) valid alongside the bargraph model while CarPlay owns the cluster
+(`!showBargraph || ScreenModule.isConnected()`). (!) What the installed VC displays with the bar on is
+not re-verified on this branch.

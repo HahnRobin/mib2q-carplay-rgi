@@ -5,6 +5,7 @@ status: verified-decompile
 sources:
   - code: java_patch/com/luka/carplay/rgd/RouteGuidance.java
   - code: hook/routeguidance/rgd_hook.c
+  - code: java_patch/com/luka/carplay/core/ScreenModule.java
   - code: hook/routeguidance/rgd_tlv.h
   - firmware: accessoryd 23G71 +[ACCNavigationRouteGuidanceUpdateInfo keyForType:]
 reconciles:
@@ -30,9 +31,9 @@ upstream just delivers state, everything downstream renders it:
 flowchart LR
     ios["iOS RGD<br/>0x5200-0x5204"] --> tlv["hook: parse TLVs<br/>rgd-tlv"]
     tlv --> bus["bus: EVT_RGD_UPDATE<br/>bus-protocol"]
-    bus --> act["decide wantActive<br/>+ 2-stage promote"]:::here
+    bus --> act["decide wantActive<br/>+ BAP start / ctx 80"]:::here
     act --> bap["BAP FctIDs (HUD)<br/>bap-fctids"]
-    act --> comp["cluster ctx 74<->80<br/>compositing"]
+    act --> comp["cluster ctx 74<->80<br/>display-contexts"]
     classDef here fill:#fde68a,stroke:#b45309,color:#000;
 ```
 
@@ -76,32 +77,42 @@ Therefore `visible_in_app==0` must **not** deactivate while the route still look
 end-of-route is caught by the `routeState==NO_ROUTE_SET` hard override. See [[rgd-tlv]] for the full
 TLV map and [[accessoryd-rgd]] for the enum evidence.
 
-## Two-stage activation (why the cluster doesn't flicker)
+## Activation, presentation and route end
 
-`wantActive` rising does **not** immediately switch the cluster to the maneuver context:
+`wantActive` rising starts BAP and exposes ctx 80 on the **same edge**; renderer readiness no longer
+gates the context:
 
 ```mermaid
 stateDiagram-v2
     direction LR
     [*] --> Idle: stock ctx 74
-    Idle --> BAPOwned: wantActive -> bap.onStart()
-    BAPOwned --> Presenting: renderer FRAME_READY
-    Presenting --> BAPOwned: presentation lost (retry)
-    BAPOwned --> Idle: wantActive false
-    Presenting --> Idle: wantActive false / route end
-    note right of BAPOwned
-        BAP published, cluster still ctx 74
-        (setNavActive false)
-    end note
-    note right of Presenting
-        setNavActive(true) -> ctx 80
-        (maneuver over stock map)
+    Idle --> Active: wantActive -> bap.onStart() ok -> setNavActive(true)
+    Active --> Active: presentation lost (renderer not ready) - keep ctx 80, retry 500 ms
+    Active --> Hold: wantActive false -> bap.onStop()/onRouteEnd(), setNavActive(false)
+    Hold --> Idle: VC Fct44 KDK visible=false
+    Hold --> Active: route active again
+    note right of Active
+        ctx 80 (maneuver over stock map);
+        presentationConfirmed tracks
+        renderer FRAME_READY + BAP publish
     end note
 ```
 
-- **Stage 1** - own BAP and publish the start sync, but keep stock ctx 74 (`setNavActive(false)`).
-- **Stage 2** - only after `maneuver_render` confirms a rendered frame does `setNavActive(true)`
-  promote the cluster to ctx 80 -> see [[compositing]] / [[display-contexts]].
+- **Start** - `bap.onStart()` publishes the BAP start sync; only if it succeeds does
+  `ScreenModule.setNavActive(true)` select ctx 80. The BAP start is the edge on which the VC animates its
+  KDK slot in, so waiting for `FRAME_READY` only left that slot empty. If the start fails, the cluster
+  stays on stock and a presentation check retries.
+- **Presentation** - `presentationConfirmed` still requires renderer `FRAME_READY` plus a successful
+  BAP publish; it gates the route-text hold/scroll ([[vc-route-text]]) and triggers a full cached-state
+  replay, not the context. A lost renderer keeps ctx 80 and retries on a 500 ms tick
+  (`PRESENTATION_RETRY_MS`); dirty bits survive until both outputs have published.
+- **End** - `setNavActive(false)` does not drop the context immediately: while the VC still reports the
+  KDK visible, `ScreenModule` holds ctx 80 until the VC withdraws it (FctID 44 ->
+  `ClusterLayerController.onVcVisibility` -> `ScreenModule.onVcKdkVisibility(false)`), then returns to
+  stock 74. No timer is involved - see [[display-contexts]] / [[kdk-geometry]].
+- **Route generation** - a changed `route_generation` from the hook (native route reset) clears all
+  maneuver slots, lane events and route fields before the new fields apply, so reused slot versions never
+  inherit the previous route. See [[rgd-tlv]].
 
 ## Transient `route_state=0` is debounced in the C hook
 

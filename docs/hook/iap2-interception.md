@@ -40,12 +40,15 @@ registers whatever stands in the table at its first real Cinemo boundary, calls 
 session state, outgoing transport frames, the raw `NmeTransport::Recv` tap) is declared in its own
 `hook_module_def_t`, so `hook_framework.c` includes no module header. `hook_framework` keeps a
 priority-ordered registry and routes each parsed frame to the modules that asked for its `msgid`.
+The shared object exports only the five Cinemo interposers (build-enforced allowlist) - see
+[[integration-seam]].
 
 ## Frame parsing
 
 `iap2_find_frame` scans the transport buffer for the iAP2 frame sync, reads the frame length, the
 `msgid` (**BE16 at offset +4**) and the payload (from +6). Route-guidance frames are `0x5200-0x5204`;
-a TLV iterator then walks the payload (see [[rgd-tlv]]).
+the RGD module validates the **whole** message before parsing it and hands a malformed one back to
+stock untouched (see [[rgd-tlv]]).
 
 ## Identify patcher
 

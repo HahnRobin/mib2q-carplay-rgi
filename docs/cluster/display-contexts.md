@@ -5,6 +5,7 @@ status: verified-source
 sources:
   - code: java_patch/de/audi/tghu/fwhmi/DisplayManagerMIB2High.java
   - code: java_patch/com/luka/carplay/core/ScreenModule.java
+  - code: java_patch/com/luka/carplay/cluster/ClusterLayerController.java
   - code: maneuver_render/platform_qnx.c
   - code: common/cluster_surface.c
 reconciles:
@@ -27,7 +28,7 @@ custom context without fighting native nav.
 | id | owner | role |
 |---:|---|---|
 | 33 | stock | native cluster map (also in stock ctx 74) |
-| 98 | `maneuver_render` | maneuver overlay, **transparent when idle** |
+| 98 | `maneuver_render` | maneuver overlay, **transparent when idle** ([[maneuver-renderer]]) |
 | 101 / 102 | stock (987 Image backings) | KDK backing planes (sport / popup) |
 
 `maneuver_render` opens a managed screen window with `ID_STRING="98"` via `cluster_surface`
@@ -46,8 +47,8 @@ flowchart LR
         direction TB
         m1["98 maneuver"] --- m2["101/102 KDK backing"] --- m3["native map 33"]
     end
-    c74 -->|"RGI confirmed"| c80
-    c80 -->|"guidance ends"| c74
+    c74 -->|"RGI BAP start"| c80
+    c80 -->|"route ended + VC hid KDK (Fct44)"| c74
 ```
 
 - **dc[74]** `CTX_MAP_KDK` (stock) - native map + KDK; the cluster's resting state.
@@ -71,12 +72,18 @@ stateDiagram-v2
     Ctx80 --> Stock74: setUpdateRate(0) -> switchContext(74) -> setUpdateRate(30)
 ```
 
-- `desiredCtx = (connected && navActive) ? 80 : 74` - pure function, worker converges to it.
+- `desiredCtx = (connected && navActive) ? 80 : 74` - pure function, worker converges to it
+  (reconciled every 250 ms).
+- `navActive` is set by `RouteGuidance` on a successful BAP start ([[rgd-activation]]). On route end
+  `setNavActive(false)` keeps it true (`navHidePending`) while `ClusterLayerController.isKdkVisible()`,
+  i.e. while the VC is still fading its KDK out; `onVcKdkVisibility(false)` (FctID 44) then releases it.
+  If the KDK is already hidden, the release is immediate. There is no hold timer.
 - Entering 80 from stock needs a real context change first, so the worker **bounces** through ctx 72
   (`CTX_MAP`, kombi-map - never ours) for 180 ms, then switches to 80 and sets 30 FPS. This forces
   `preContextSwitchHook` + the MOST encoder re-point that `switchContext` otherwise short-circuits.
 - `isClusterContextWriterThread()` lets `DisplayManagerMIB2High` distinguish our serialized writes
   from stock screen-controller requests while CarPlay owns terminal 1.
 
-On disconnect the worker restores stock 74; it is never killed, so no stale per-session worker can
-outlive its session.
+On disconnect the worker restores stock 74 (and clears any pending hide); it is never killed, so no
+stale per-session worker can outlive its session. Layer opacity inside ctx 80 is
+`ClusterLayerController`'s job - see [[kdk-geometry]].

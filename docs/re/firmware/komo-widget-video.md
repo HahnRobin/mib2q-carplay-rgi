@@ -67,7 +67,9 @@ in this firmware dump, so treat those exact names as inferred. None of this chai
 
 ## Relevance to the patch
 
-Publishing our maneuver stream is not enough; the cluster must also see `gfxAvailable=true`. This is
-why the renderer startup handshake gates the MOST video path on a confirmed first frame before the
-cluster context switch - a broken/blank stream must never be published. See [[display-contexts]] and
-[[compositing]].
+On this branch the cluster keeps showing the **stock native map** (its own MOST video path), and our
+maneuver plane is composited into that stream ([[compositing]]), so the patch does not need to drive
+the gfx gate itself. `BAPBridge.forceGfxAvailable` writes data rate + `gfxAvailable` only when
+`Util.isClusterMapMOST()` is true and is a no-op on the FPK cluster; forcing the data rate there parked
+the stock kombi map in its hidden context (see [[java-cleanup-audit]]). Context 80 is selected on the
+RGI BAP start, not on a renderer first-frame handshake ([[rgd-activation]], [[display-contexts]]).

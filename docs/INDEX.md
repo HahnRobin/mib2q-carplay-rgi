@@ -10,28 +10,31 @@ Map of Content for the reverse-engineering and implementation notes. Each note c
 every factual claim is validated against a source (code / firmware / iOS binary) and states only the
 final verified fact. `reconciles:` frontmatter records which legacy docs were folded in.
 
-> **All topics seeded [x]** - 29 notes. `(!)` items inside notes are real product TODOs, not doc gaps.
+> **All topics seeded [x]** - 31 notes. `(!)` items inside notes are real product TODOs, not doc gaps.
 
-## [architecture](architecture.md) - process topology, threading, boot / init - build & deploy  [x]
+## [architecture](architecture.md) - process topology, threading, boot / init - build, test & deploy  [x]
 
 ## Hook - `libcarplay_hook.so`  [x]
 - [iap2-interception](hook/iap2-interception.md) - recv/read hooks, FF-5A framing, Identify patch
-- [bus-protocol](hook/bus-protocol.md) - localhost TCP :19810, sticky event/command frames
+- [bus-protocol](hook/bus-protocol.md) - localhost TCP :19810, sticky event/command frames, fd/generation lifecycle, signal policy
 - [cover-art](hook/cover-art.md) - chunked JPEG reassembly, async decode -> VC picture
-- [integration-seam](hook/integration-seam.md) - what LD_PRELOAD interposes vs stays stock; NME injection ABI; hardening
+- [integration-seam](hook/integration-seam.md) - what LD_PRELOAD interposes vs stays stock (5-symbol export allowlist); NME injection ABI; hardening
 
 ## Route guidance - RGD -> BAP  [x]
-- [rgd-tlv](rgd/rgd-tlv.md) - iAP2 RouteGuidanceUpdate TLV map (0x5200-0x5204)
-- [rgd-activation](rgd/rgd-activation.md) - route state machine, `visible_in_app`, gating
+- [rgd-tlv](rgd/rgd-tlv.md) - iAP2 RouteGuidanceUpdate TLV map (0x5200-0x5204), whole-message validation, route_generation
+- [rgd-activation](rgd/rgd-activation.md) - route state machine, `visible_in_app`, BAP start -> ctx 80, route-end hold
 - [maneuver-mapping](rgd/maneuver-mapping.md) - full EManeuverType 0-53 -> BAP descriptor
 - [bap-fctids](rgd/bap-fctids.md) - CarPlay-owned FctID matrix + gating
-- [bargraph-sync](rgd/bargraph-sync.md) - distance fill + call-for-action blink
+- [bargraph-sync](rgd/bargraph-sync.md) - FctID 18 bargraph + renderer arrow fill, shared 600 ms blink
+- [lane-guidance](rgd/lane-guidance.md) - FctID 24 + renderer lane panel, atomic LANES batch
+- [vc-route-text](rgd/vc-route-text.md) - FctID 19 route text, ETA toggle, grapheme-safe scrolling, vc-text.bin
 - [navsd-catalogue](rgd/navsd-catalogue.md) - complete NavSD FctID catalogue (1-56)
 
 ## Cluster  [x]
 - [display-contexts](cluster/display-contexts.md) - dc[74]/dc[80], displayables 98/33/101/102, switch worker
 - [compositing](cluster/compositing.md) - maneuver overlay over native map, HU->MOST->VC H.264
-- [kdk-geometry](cluster/kdk-geometry.md) - KDK backings 101/102, stages, HU-side geometry table
+- [maneuver-renderer](cluster/maneuver-renderer.md) - :19800 protocol, C++ scene engine, visible area, watchdog
+- [kdk-geometry](cluster/kdk-geometry.md) - KDK backings 101/102, VC Fct44/Fct54-driven visibility & stage, HU geometry table
 
 ## Input  [x]
 - [touchpad-dpad](input/touchpad-dpad.md) - MMI touchpad -> DPAD bridge (TouchpadController)
@@ -43,7 +46,7 @@ final verified fact. `reconciles:` frontmatter records which legacy docs were fo
 - [session-lifecycle](deploy/session-lifecycle.md) - session audit: watchdog-hang, USB pre-RTSP class, resilience risks R1-R4
 
 ## Maintenance  [x]
-- [java-cleanup-audit](maintenance/java-cleanup-audit.md) - Java patch cleanup status; the remaining `forceGfxAvailable` reflection ladder
+- [java-cleanup-audit](maintenance/java-cleanup-audit.md) - Java patch cleanup status; remaining dead accessors
 
 ## Reverse engineering - iOS  [x]
 - [accessoryd-rgd](re/ios/accessoryd-rgd.md) - ACCNav RGUpdate enum (accessoryd 23G71)
@@ -67,7 +70,7 @@ Every note carries a `status` recording how its facts were checked.
 |---|---|---|
 | `verified-decompile` | confirmed by reading the disassembly/decompilation of the actual binary | rgd-tlv, rgd-activation, accessoryd-rgd, maps-maneuvers, carkitd-bonjour, display-manager, compositing, kdk-geometry (VC section) |
 | `verified-trace` | confirmed against the actual on-device log / config | connect |
-| `verified-source` | confirmed against this repo's source (ground truth for our own code) | architecture, iap2-interception, bus-protocol, cover-art, integration-seam, maneuver-mapping, bap-fctids, bargraph-sync, display-contexts, kdk-geometry (HU), touchpad-dpad, steering-wheel, supervisor-lifecycle, session-lifecycle, java-cleanup-audit, dsi-carkombi, navsd-catalogue |
+| `verified-source` | confirmed against this repo's source (ground truth for our own code) | architecture, iap2-interception, bus-protocol, cover-art, integration-seam, maneuver-mapping, bap-fctids, bargraph-sync, lane-guidance, vc-route-text, maneuver-renderer, display-contexts, kdk-geometry (HU), touchpad-dpad, steering-wheel, supervisor-lifecycle, session-lifecycle, java-cleanup-audit, dsi-carkombi, navsd-catalogue |
 | `partially-verified` | code paths confirmed; some symbols only string-level / inferred | komo-widget-video (gfx-gate chain) |
 | `from-re-notes` | carried faithfully from prior RE notes; not re-verified in the binary this pass | vc-aio-arrow |
 | `abandoned` | investigation record of a feature that was tried and rolled back (not shipped) | phone-tab-gating |

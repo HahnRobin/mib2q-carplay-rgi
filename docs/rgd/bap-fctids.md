@@ -6,6 +6,7 @@ sources:
   - code: java_patch/com/luka/carplay/rgd/BAPBridge.java
   - code: java_patch/com/luka/carplay/rgd/GatedCombiService.java
   - code: java_patch/de/audi/tghu/navi/app/cluster/ClusterService.java
+  - code: java_patch/de/audi/tghu/navi/app/cluster/ScreenCombiBAPListener.java
 reconciles:
   - docs/reference/NAVSD_FCTID_MATRIX.md
 ---
@@ -26,7 +27,7 @@ stay delegated to the stock navigator. Full stock catalogue: [[navsd-catalogue]]
 `BAPBridge` toggles two flags so BAPBridge is the single writer for route-guidance FctIDs:
 
 - `blockRouteGuidance` - drops stock writes to the maneuver FctIDs (17/18/23/24/39/49/55).
-- `blockCurrentPositionInfo` - drops stock writes to the lower-bar text FctIDs (19/21/22/46).
+- `blockCurrentPositionInfo` - drops stock writes to the road/lower-bar text FctIDs (19/20/21/22/46).
 
 ```mermaid
 flowchart LR
@@ -44,22 +45,31 @@ See [[rgd-activation]] for when these flip. Everything else always delegates to 
 | FctID | Hex | Name | Role | Notes |
 |---:|---:|---|---|---|
 | 17 | 0x11 | RG_Status | route-guidance active; starts FctSync | sent during RGI |
-| 18 | 0x12 | DistanceToNextManeuver | next-turn distance **+ bargraph** | [[bargraph-sync]] |
-| 19 | 0x13 | CurrentPositionInfo | lower-bar road / info line | gated by `blockCurrentPositionInfo`; info-toggle -> ETA, see [[steering-wheel]] |
+| 18 | 0x12 | DistanceToNextManeuver | next-turn distance **+ bargraph** | same level drives the renderer arrow fill, [[bargraph-sync]] |
+| 19 | 0x13 | CurrentPositionInfo | all CarPlay route text (<= 96 B UTF-8, scrolled) | gated by `blockCurrentPositionInfo`; [[vc-route-text]], OK toggle -> ETA ([[steering-wheel]]) |
+| 20 | 0x14 | TurnToInfo | turn-to / signpost text | sent as `("", "")` during RGI; stock writes gated by `blockCurrentPositionInfo` |
 | 21 | 0x15 | DistanceToDestination | trip distance | gated during RGI |
-| 22 | 0x16 | TimeToDestination | ETA / remaining | ETA clock uses vehicle TZ (dest-TZ TLV 0x15 unused, see [[rgd-tlv]]) |
+| 22 | 0x16 | TimeToDestination | absolute arrival clock | always `timeInfoType = 1` (type 0 blanks the VC block); HU local TZ, dest-TZ TLV 0x15 unused ([[rgd-tlv]]) |
 | 23 | 0x17 | ManeuverDescriptor | up to 3 maneuver slots | [[maneuver-mapping]] |
-| 24 | 0x18 | LaneGuidance | lane arrows | from 0x5204 |
+| 24 | 0x18 | LaneGuidance | lane arrows | from 0x5204, shared gate with the renderer panel, [[lane-guidance]] |
 | 39 | 0x27 | ActiveRGType | guidance presentation type | sends `0` (BAP RGI) |
 | 46 | 0x2E | DestinationInfo | destination detail | gated during RGI |
-| 49 | 0x31 | Exitview | junction/exit-view + FctSync member | toggled to force sync |
+| 49 | 0x31 | Exitview | junction/exit-view + FctSync member | EU<->NAR variant toggled, `exitViewNum` always 0 |
 | 55 | 0x37 | ManeuverState | maneuver transition state | sent |
 
 ## FctSync (37) is implicit
 
 `FunctionSynchronisation` (FctID 37) atomically syncs FctID 17/18/23/49 - never written directly.
 `BAPBridge` toggles the cosmetic Exitview (49) variant to force a transmission when the stock
-`sendStatusIfChanged` would otherwise dedup a bargraph tick.
+`sendStatusIfChanged` would otherwise dedup a descriptor or bargraph update.
+
+## VC -> HU inputs (44 / 54)
+
+The VC's own FctID 44 (MapViewAndOrientation, KDK visibility) and FctID 54 (Map_Presentation, KDK
+stage) stay stock-owned, but `ScreenCombiBAPListener` forwards the accepted values to
+`ClusterLayerController` **before** stock acknowledges them (`updateMapVisibility` ->
+`onVcVisibility`, `setMapPresentation` -> `onVcPresentation`). They drive KDK layer opacity/stage, the
+renderer viewport and the end-of-route context hold - see [[kdk-geometry]].
 
 ## Scale (45) & altitude (47) pass through
 

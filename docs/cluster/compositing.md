@@ -65,7 +65,8 @@ numbering (decompiled switch FUN_00638d44): `0 KVS_Invalid, 1 KVS_RGI, 2 KVS_RGI
   behind it, so the VC receives one stream = native map + our maneuver overlay.
 - Displayable 98 has no stock owner, so binding it is not a race. The old id-20 takeover / flapping
   is gone - see [[display-contexts]].
-- The renderer runs **no `dmdt`**; all context routing is Java-driven from `ScreenModule`.
+- The renderer runs **no `dmdt`**; all context routing is Java-driven from `ScreenModule`. Renderer
+  protocol and scene engine: [[maneuver-renderer]].
 
 ## Rate
 

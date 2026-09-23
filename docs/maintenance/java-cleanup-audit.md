@@ -24,11 +24,13 @@ against stock MU1316) and **re-verified against the current branch**. Each item 
 > [[architecture]] - Java patch layer -> cluster HUD + route-info - KOMO gfx gate -> [[komo-widget-video]]
 > - route-info toggle publishes [[bap-fctids]] FctID 22
 
-**Bottom line:** three of the four cleanup groups are complete. The **KOMO reflection ladder**
-(`forceGfxAvailable`) is the one substantive item still open, plus two small dead accessors that
-survived the dead-member sweep.
+**Bottom line:** all four cleanup groups are resolved on this branch except two dead-code leftovers:
+the `FrameworkRef` accessors, and `ClusterService.refreshInitializingScreenAfterCarPlay()`, which came
+back with the ported `ClusterService` but has no caller.
 
 ## [x] route-info phase - live, keep (was: closed)
+
+(Line numbers in this section predate the RGI port; the call chain itself is unchanged.)
 
 The historical "phase can never leave 0, remove it" finding is **resolved and the path is live** -
 do not remove it. It is now driven by the steering-wheel roller press:
@@ -46,49 +48,25 @@ are therefore reachable and must stay. See [[steering-wheel]].
 
 ## [x] fake ClusterService pipeline API - removed (was: to remove)
 
-Confirmed gone. `activateCustomRendererPipeline()`, `deactivateCustomRendererPipeline()` and
-`refreshInitializingScreenAfterCarPlay()` no longer exist anywhere in `java_patch/`, and the
+Confirmed gone: `activateCustomRendererPipeline()` and `deactivateCustomRendererPipeline()` no longer
+exist in `java_patch/`. (!) `refreshInitializingScreenAfterCarPlay()` is back in `ClusterService`
+(ported from mhi2, where it restores the stock INITIALIZING screen after an altScreen takeover) but
+nothing calls it here - remove it or wire it deliberately. The
 `BAPBridge` branch that read the constant "readiness" string is gone too. Real readiness
 (`RendererServer.isReady()/isFrameReady()` + frame-event gate) remains authoritative. The four live
 `ClusterService` accessors (`getDSIResponseContainer()`, `triggerRefreshRGIValid()`, and the CombiBAP
 getter/setter) are retained as intended.
 
-## (!) KOMO reflection ladder (`forceGfxAvailable`) - STILL OPEN (key remaining item)
+## [x] KOMO reflection ladder (`forceGfxAvailable`) - resolved
 
-**Current code:** the three-strategy reflection ladder is intact at
-`BAPBridge.java:2175-2271`, with `import java.lang.reflect.Field/Method` (`:29-30`) and the
-`private KOMOService komoService` field (`:139`). What it does today:
-
-1. **Pre-step** - reflectively locates and writes `KOMOService.dataRate` (walks the superclass chain
-   for a `dataRate` field, `:2180-2196`).
-2. **Strategy 1** - reflective `komoService.updateGfxState(gfx, 1)` (`:2198-2208`).
-3. **Belt-and-suspenders** - reflective `csRef.setKOMODataRate(desiredRate)` (`:2210-2221`).
-4. **Strategy 2/3** - pull `clusterViewMode` off `ClusterService` by reflection, then reflective
-   `setGFXAvailable(boolean)` with a `gfxAvailable` field write as last resort (`:2223-2270`).
-
-**Why the audit flagged it (assumptions the stock source contradicts):**
-
-- `KOMOService` has **no `dataRate` field** - the pre-step field search at `:2180-2196` cannot
-  succeed on stock.
-- `ClusterService.setKOMODataRate()` is public but is a **no-op unless `Util.isClusterMapMOST()`**
-  (SysConst 541==1; FPK cars fail the guard). Calling it reflectively does not bypass that gate.
-
-**Proposed public-API replacement.** The required state is exposed directly, no reflection needed:
-
-- `ClusterService.getClusterViewMode()` is public;
-- `ClusterViewMode.setDataRate(int)` is public - **call this first**;
-- `ClusterViewMode.setGFXAvailable(boolean)` is public - **call this second**;
-- (`KOMOService.updateDataRate` / `updateGfxState` are public too and merely delegate to those same
-  two methods, so either entry point works.)
-
-Replace the ladder with direct calls on `csRef.getClusterViewMode()`, setting **data rate before gfx
-availability**, gated on `Util.isClusterMapMOST()` (the honest gate - the MOST pacing hint only
-matters where that guard is true). Then drop the `komoService` field, its acquisition/logging, and
-the `java.lang.reflect.Field/Method` imports.
-
-This is a **semantic change**, not a mechanical edit: validate map/popup start, renderer respawn, and
-RGI stop on the unit before release. Do **not** touch the reflection in `CoverArtProviderMux` - that
-reaches a stock-private provider registry with no public setter.
+The reflection ladder is gone (`CoverArtProviderMux` is now the only `java.lang.reflect` user).
+`BAPBridge.forceGfxAvailable` returns immediately unless `Util.isClusterMapMOST(fw)`; on a MOST cluster
+it calls the public `KOMOService.updateDataRate(rate, 1)` then `updateGfxState(gfx, 1)` - data rate
+**before** gfx availability - falling back to `ClusterViewMode.setDataRate` / `setGFXAvailable` +
+`ClusterService.setKOMODataRate` when no `KOMOService` was acquired. On this FPK cluster it therefore
+does nothing: every data-rate write used to run `ClusterViewMode.setDataRate -> refreshMapVisibility`,
+which parked the stock kombi map in its hidden context after a route (frozen map, roller zoom
+swallowed) until the VC re-sent MapViewAndOrientation. See [[komo-widget-video]].
 
 ## (!) disabled diagnostics & dead members - PARTIALLY DONE
 
@@ -101,11 +79,13 @@ reaches a stock-private provider registry with no public setter.
   `BAPBridge.isActionBlinkThreadRunning()`, `EXITVIEW_ROW/EXITVIEW_ASIA`,
   `AltScreenModule.isClusterActive()`, `ROUTE_STATE_ACCEPT_ALL_MANEUVER_IDX` - all removed.
 
-**Still open (two dead accessors survived the sweep, no callers found):**
+**Still open (dead code, no callers found):**
 
-- `RendererServer.isConnected()` (`RendererServer.java:426`) - no call site.
-- `FrameworkRef.context()` / `deviceManager()` / `hmiServiceApp()` (`FrameworkRef.java:34,37-38`) -
+- `FrameworkRef.context()` / `deviceManager()` / `hmiServiceApp()` (`FrameworkRef.java:36-40`) -
   no call sites; drop these and their now-unused imports.
+- `ClusterService.refreshInitializingScreenAfterCarPlay()` - see above.
+
+(`RendererServer.isConnected()` is live again: `BAPBridge` uses it in renderer recovery.)
 
 (Note: `ScreenModule.isConnected()` is a **different, live** method - it pins the cluster while
 CarPlay owns it, called from `CombiMapController` and `ClusterService`. Keep it.)
@@ -124,11 +104,8 @@ CarPlay owns it, called from `CombiMapController` and `ClusterService`. Keep it.
 
 ## Remaining patch order
 
-The route-info, fake-pipeline, and trace/debug items are done. What is left:
-
-1. Replace the KOMO reflection ladder with the direct `ClusterViewMode` API, gated on
-   `Util.isClusterMapMOST()`, and validate on-unit.
-2. Remove the two dead accessors (`RendererServer.isConnected()`,
-   `FrameworkRef.context/deviceManager/hmiServiceApp` + unused imports).
-3. Rebuild, rerun the six-class ABI comparison, and test cold boot, RGI start/stop, View changes,
-   renderer death/reconnect, stock navigation after disconnect, and cover art.
+1. Remove the dead `FrameworkRef` accessors (+ unused imports) and decide on
+   `refreshInitializingScreenAfterCarPlay()`.
+2. Rebuild, rerun the stock-ABI/linkage audit (`scripts/audit_java_stock.sh`) and the host suites
+   (`scripts/test_route_info.sh`, `scripts/test_java_transports.sh`), then test on the unit: cold boot,
+   RGI start/stop, View changes, renderer death/reconnect, stock navigation after disconnect, cover art.

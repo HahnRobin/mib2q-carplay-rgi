@@ -22,9 +22,10 @@ stock native map, so rotation is left to stock; only the press is repurposed.
 ## Rotation (zoom) -> stock
 
 The roller sends rotation as Navigation-BAP `MapScale.steps`. Since the cluster renders the stock
-native map (no CarPlay video plane to zoom), `ScreenCombiBAPListener` adds no override - it is a
-`CombiBAPListener` subclass with no behaviour of its own, so the step falls through to stock
-`setMapScale`, which zooms the native cluster map exactly as stock does.
+native map (no CarPlay video plane to zoom), `ScreenCombiBAPListener` does not override `setMapScale`:
+the step falls through to stock, which zooms the native cluster map exactly as stock does. (The
+listener only observes FctID 44 visibility and FctID 54 stage for the KDK layers - see
+[[kdk-geometry]].)
 
 ## Press (OK) -> route-info toggle
 
@@ -36,7 +37,8 @@ the centre knob still selects in the CarPlay Main UI.
 
 Gated to the confirmed VC map tab, the press then calls `ScreenModule.onSteeringWheelOkPressed()` ->
 `RouteGuidance` toggles the cluster route-info line between the **next turn-to street** (phase 0) and
-the **trip summary** (ETA / arrival clock + remaining, phase 1). See [[bap-fctids]] (FctID 19).
+the **trip summary** (ETA / arrival clock + remaining, phase 1). Phase 1 falls back to phase 0 by
+itself 20 s after it was published. Text layout: [[vc-route-text]] (FctID 19).
 
 ```mermaid
 flowchart LR

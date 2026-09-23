@@ -4,6 +4,7 @@ tags: [rgd, maneuver, ios-re, verified]
 status: verified-source
 sources:
   - code: java_patch/com/luka/carplay/rgd/ManeuverMapper.java
+  - code: java_patch/com/luka/carplay/rgd/RendererMapper.java
   - code: hook/routeguidance/rgd_tlv.h
   - code: hook/routeguidance/rgd_tlv.c
   - firmware: Maps 23G71 +[CarClusterUpdateManeuverInfo maneuverUpdateWithStep:component:]
@@ -26,7 +27,7 @@ streets). Ground truth = `ManeuverMapper.map()`, validated against Apple's Maps/
 flowchart LR
     tlv["0x5202 type(0x03)<br/>+ exitAngle(0x0B)<br/>+ drivingSide(0x08)"] --> mm["ManeuverMapper<br/>type->element, angle->direction"]:::here
     mm --> f23["FctID 23<br/>ManeuverDescriptor"]
-    mm --> rend["renderer glyph"]
+    mm --> rend["RendererMapper -> maneuver_render"]
     classDef here fill:#fde68a,stroke:#b45309,color:#000;
 ```
 
@@ -50,8 +51,8 @@ flowchart LR
 | 5 | FOLLOW_ROAD | FOLLOW_STREET | STRAIGHT |
 | 6 | ENTER_ROUNDABOUT | TURN | L/R by driving side |
 | 7 | EXIT_ROUNDABOUT | EXIT_ROUNDABOUT_TRS_L/R | L/R by driving side |
-| 8 | OFF_RAMP | EXIT_LEFT/RIGHT | `rampDirection` (exit-angle sharpness) |
-| 9 | ON_RAMP | TURN | SLIGHT_L/R |
+| 8 | OFF_RAMP | TURN | SLIGHT_L/R (side from angle sign, else driving side) |
+| 9 | ON_RAMP | TURN | SLIGHT_L/R (same rule) |
 | 10 | ARRIVE_END_OF_NAVIGATION | ARRIVED | STRAIGHT |
 | 11 | START_ROUTE | TURN | `directionFromTurnAngle` |
 | 12 | ARRIVE_AT_DESTINATION | ARRIVED | STRAIGHT |
@@ -64,8 +65,8 @@ flowchart LR
 | 19 | U_TURN_AT_ROUNDABOUT | ROUNDABOUT_TRS_L/R | UTURN |
 | 20 | LEFT_TURN_AT_END | TURN | `dirFromEndOfRoadAngleLeft` |
 | 21 | RIGHT_TURN_AT_END | TURN | `dirFromEndOfRoadAngleRight` |
-| 22 | HIGHWAY_OFF_RAMP_LEFT | EXIT_LEFT | `rampDirection` |
-| 23 | HIGHWAY_OFF_RAMP_RIGHT | EXIT_RIGHT | `rampDirection` |
+| 22 | HIGHWAY_OFF_RAMP_LEFT | TURN | SLIGHT_LEFT (type wins over angle) |
+| 23 | HIGHWAY_OFF_RAMP_RIGHT | TURN | SLIGHT_RIGHT (type wins over angle) |
 | 24 | ARRIVE_DESTINATION_LEFT | ARRIVED | LEFT |
 | 25 | ARRIVE_DESTINATION_RIGHT | ARRIVED | RIGHT |
 | 26 | U_TURN_WHEN_POSSIBLE | UTURN | signed |
@@ -100,11 +101,22 @@ fallback when no role-2 angle is present. The `0/+/-1000 = absent` sentinel is o
 (Apple Maps 26.6 never synthesizes it). Apple collapses GEO 86/88 -> accNav 4; GEO 25/35 keep their
 own signed angle. **Type 19 stays a roundabout, not a U-turn.**
 
-## Ramps use the exit angle for sharpness
+## Ramps are one slight turn
 
-`OFF_RAMP` / `HIGHWAY_OFF_RAMP_LEFT|RIGHT` map to BAP `EXIT_LEFT/RIGHT`; sharpness comes from
-`rampDirection(exitAngle, goesLeft)` - a present angle is bucketed slight/normal/sharp via the same
-end-of-road logic, an absent one (`0/+/-1000`) keeps the gentle SLIGHT default.
+`OFF_RAMP` / `ON_RAMP` / `HIGHWAY_OFF_RAMP_LEFT|RIGHT` all map to BAP `TURN` + `SLIGHT_L/R`. BAP
+`EXIT_LEFT/RIGHT` is no longer used: even the base EXIT glyph adds a second bend back to straight,
+geometry CarPlay's single angle does not describe. For types 8/9 the angle **sign** only picks the side
+(`rampGoesLeft`; 0 and +/-1000 fall back to `drivingSide`); for 22/23 the side in the type wins even if
+the angle conflicts. The renderer draws the same single bend and, for off-ramps, adds the continuing
+main road (`RendererMapper.withForwardRoad`) - see [[maneuver-renderer]].
+
+## Generic angle -> direction
+
+`directionFromTurnAngle` (START_ROUTE, EXIT_FERRY, CHANGE_HIGHWAY) buckets at 45 deg: `<=22` straight,
+`<=67` slight, `<=112` normal, else sharp; `|angle| > 180` keeps the old signed LEFT/RIGHT fallback.
+`map(..., anglePresent)` treats a received `-1` as a real angle; only the legacy unfilled State slot
+(`-1` without presence) is normalized to the `1000` "absent" sentinel. `LEFT/RIGHT_TURN_AT_END` keep
+their end-of-road direction (not coarsened by the DSI override).
 
 ## Junction gate
 

@@ -30,12 +30,12 @@ The full stock Navigation-BAP function catalogue. The CarPlay-ownership subset a
 | 16 | 10 | CompassInfo | property | All | heading + N/NE... | stock |
 | 17 | 11 | RG_Status | property | All | RG active; starts FctSync | **CarPlay** |
 | 18 | 12 | DistanceToNextManeuver | property | All | next-turn dist + bargraph | **CarPlay** -> [[bargraph-sync]] |
-| 19 | 13 | CurrentPositionInfo | property | All | lower-bar road/info line | **CarPlay** (gated only during RGI) |
-| 20 | 14 | TurnToInfo | property | All | turn-to/signpost text | stock (not sent) |
+| 19 | 13 | CurrentPositionInfo | property | All | lower-bar road/info line | **CarPlay** (gated only during RGI) -> [[vc-route-text]] |
+| 20 | 14 | TurnToInfo | property | All | turn-to/signpost text | **CarPlay** sends empty during RGI (gated) |
 | 21 | 15 | DistanceToDestination | property | All | trip distance | **CarPlay** (gated) |
 | 22 | 16 | TimeToDestination | property | All | ETA / remaining | **CarPlay** (gated) |
 | 23 | 17 | ManeuverDescriptor | property | S/H/MH | up to 3 maneuvers | **CarPlay** -> [[maneuver-mapping]] |
-| 24 | 18 | LaneGuidance | array | S/H/MH | lane arrows | **CarPlay** |
+| 24 | 18 | LaneGuidance | array | S/H/MH | lane arrows | **CarPlay** -> [[lane-guidance]] |
 | 25 | 19 | TMCinfo | property | S/H | traffic messages | stock |
 | 26 | 1A | MagnetFieldZone | property | None | compass calib region | do not use |
 | 27 | 1B | Calibration | property | None | compass calib state | do not use |
@@ -55,7 +55,7 @@ The full stock Navigation-BAP function catalogue. The CarPlay-ownership subset a
 | 41 | 29 | GetNextListPos | method | S/H | list paging | framework |
 | 42 | 2A | NB_Speller | method | None | address-book input | not advertised |
 | 43 | 2B | MapColorAndType | property | H | stock map colour/type | stock |
-| 44 | 2C | MapViewAndOrientation | property | H | stock map view/orient | stock (high-risk map lifecycle) |
+| 44 | 2C | MapViewAndOrientation | property | H | stock map view/orient | stock; VC KDK visibility observed -> [[kdk-geometry]] |
 | 45 | 2D | MapScale | property | H | native scale + SW SetGet ACK | **stock passthrough** (see [[bap-fctids]]) |
 | 46 | 2E | DestinationInfo | property | All | destination detail | **CarPlay** (gated) |
 | 47 | 2F | Altitude | property | H/M/MH (!China) | native lower-bar altitude | **stock passthrough** |
@@ -65,6 +65,6 @@ The full stock Navigation-BAP function catalogue. The CarPlay-ownership subset a
 | 51 | 33 | POI_Search | method | None | POI search result | not advertised |
 | 52 | 34 | POI_List | array | None | POI list | stock no-op stub |
 | 53 | 35 | FSG_Setup | property | S/H | voice/POI capabilities | stock |
-| 54 | 36 | Map_Presentation | property | H | map size + side-menu states | stock (echo can't close a VC drawer) |
+| 54 | 36 | Map_Presentation | property | H | map size + side-menu states | stock (echo can't close a VC drawer); KDK stage observed -> [[kdk-geometry]] |
 | 55 | 37 | ManeuverState | property | S/H | maneuver transition state | **CarPlay** |
 | 56 | 38 | ETC_Status | property | M/MH | electronic-toll status | stock |

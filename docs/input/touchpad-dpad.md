@@ -34,7 +34,7 @@ emits a `KEY_DPAD_*` press+release pair and subtracts the threshold from that ac
 
 ## Wiring
 
-`TerminalModeDSIKeyEventsController` (class-replacement) calls `installCursorTouchSink()` on CarPlay
+`TerminalModeDSIKeyEventsController` (class-replacement) calls `installTouchpadSink()` on CarPlay
 start and routes `TouchpadController`'s `postDpad(KEY_DPAD_*)` back through the stock DSI bridge
 (`KEY_DPAD_LEFT/RIGHT/UP/DOWN` are the module's own 1/2/3/4 codes, re-emitted as DSI directional keys)
 into the CarPlay session. The sink is removed on disconnect (`setTouchSink(null)`).

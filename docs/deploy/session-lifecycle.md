@@ -127,13 +127,8 @@ ships:
   owns the blocking socket write, and connection generations discard packets queued for a preempted
   peer.
 - `CombiMapController.processModelUpdateEvent()` now calls `ScreenModule.setViewAreaMode()`, which
-  only flips `smallScreenViewArea` and re-applies **local** KDK geometry
-  (`ClusterLayerController.reapply()`) - a DisplayManager call, not a network socket with no write
-  deadline.
-
-(!) minor: that `reapply()` still runs synchronously on the stock model-update thread. It is a local
-display IPC, not the unbounded network write the audit was about, but it is the one remaining piece of
-non-trivial work done inline on a stock callback.
+  only flips `smallScreenViewArea` and notifies its listener. KDK stage geometry follows VC's
+  Fct54/Fct44 in `ClusterLayerController`, not the view-size event.
 
 ### R4 - stale-renderer replacement eating the SI startup budget [x]
 

@@ -37,8 +37,12 @@ What this patch makes the head unit + cluster do that stock MHI2Q doesn't:
 
 - **Full HUD route guidance** from CarPlay nav (Maps, Waze, etc.) - maneuver icons, lanes, distance
   bargraph, ETA and destination.
-- **Custom maneuver overlay** drawn over the cluster's native map plane (the same MOST video plane the
-  HU uses for its own map), transparent when idle.
+- **Custom 3D maneuver overlay** drawn over the cluster's native map plane (the same MOST video plane
+  the HU uses for its own map), transparent when idle: the arrow fills as the maneuver approaches and
+  blinks in step with the HUD, a lane strip appears under it, and it follows the cluster's KDK
+  stage/visibility.
+- **Route text on the cluster** - next road / signpost, scrolled when too long (grapheme-safe, any
+  script).
 - **Album cover art** forwarded to the cluster's now-playing widget.
 - **MMI touchpad → DPAD bridging** so finger drags navigate CarPlay menus.
 - **Steering-wheel roller** - rotation keeps stock map zoom; the OK press toggles the cluster
@@ -50,10 +54,12 @@ What this patch makes the head unit + cluster do that stock MHI2Q doesn't:
 | --- | --- |
 | `hook/` | Shipping native `libcarplay_hook.so` source |
 | `java_patch/` | The only supported Java patch source |
-| `maneuver_render/` | GLES maneuver overlay renderer |
+| `java_resources/` | Resources packed into the jar (VC glyph-width / Unicode table `vc-text.bin`) |
+| `maneuver_render/` | GLES maneuver overlay renderer (C, plus the C++11 `scene/` engine) |
 | `common/` | Shared QNX Screen surface code |
 | `deploy/smartphone_integrator/` | Runtime scripts and child-process configuration for the HU |
-| `scripts/` | Docker build entry points (Java / hook / renderer) |
+| `scripts/` | Docker build entry points (Java / hook / renderer) and host test runners |
+| `tests/` | Host tests (C, Java, Python) for the hook, Java bridge and renderer |
 | `toolchain/qnx65-abi/` | QNX Screen ABI headers used only for cross-compilation |
 | `docs/` | Obsidian knowledge base - validated RE + implementation notes (open [`docs/INDEX.md`](docs/INDEX.md)) |
 | `assets/` | Screenshots and visual reference material |
@@ -74,7 +80,9 @@ Run from the repository root:
 All three build in Docker - no host toolchain required. The Java patch compiles in a pinned
 `eclipse-temurin:8` container (against the stock jar + OSGi libs under `../../Tools/jxe2jar`); the two
 native builds use the `qnx65-armv7-toolchain` image and synthesize their import stubs, so the resulting
-ELF binds the unit's real Screen/EGL/GLES libraries at runtime. There are no Java variants.
+ELF binds the unit's real Screen/EGL/GLES libraries at runtime. The renderer's C++ scene engine is
+built with that image's `g++` and must not pull in the C++ runtime; the hook build rejects any dynamic
+export beyond its five interposers. There are no Java variants.
 
 The hook logs by default. To adjust at build time:
 
@@ -84,7 +92,19 @@ LOG=0 ./scripts/build_hook.sh                  # strip logging entirely
 LOG_RGD_PACKET_RAW=1 ./scripts/build_hook.sh   # + raw RGD packet hex dumps (needs LOG=1)
 ```
 
-Full toolchain, threading and boot details live in the knowledge base - see
+### Tests
+
+Host-only, no unit needed:
+
+```sh
+./scripts/run_tests.sh            # C tests: RGD parser, bus, signal guard, protocol constants
+./scripts/test_route_info.sh      # Java route-guidance / BAP bridge against the stock interfaces
+./scripts/test_java_transports.sh # Java bus + renderer sockets, touchpad
+./scripts/test_maneuver_native.sh # renderer engine + lanes (macOS, ASan/UBSan)
+```
+
+The Java suites need the stock MU1316 jar and JDK under `../../Tools/jxe2jar`. Full toolchain,
+threading, boot and the complete test list live in the knowledge base - see
 [`docs/architecture.md`](docs/architecture.md).
 
 ## Deployment
@@ -147,23 +167,21 @@ For raw route-guidance packet dumps, rebuild the hook with `LOG_RGD_PACKET_RAW=1
 
 `docs/` is an Obsidian knowledge base - one note per topic, each fact validated against code /
 firmware / iOS binary. Start at [`docs/INDEX.md`](docs/INDEX.md): architecture & threading, the hook
-and bus, route guidance (TLV → BAP → cluster), cluster compositing, input, deploy/connect, the
-reverse-engineering references, and a per-note verification status.
+and bus, route guidance (TLV → BAP → cluster, lanes, route text), cluster compositing and the maneuver
+renderer, input, deploy/connect, build & host tests, the reverse-engineering references, and a
+per-note verification status.
 
 ## Known issues & TODO
 
 Help wanted - open items on the current branch:
 
-- **Maneuver renderer has no lane guidance.** The BAP HUD renders lane arrows, but the projection
-  overlay (`maneuver_render`) does not. Lane data should be plumbed through to the renderer and drawn
-  the same way the HUD does.
 - **Punch-through during the RGI on/off animation.** While route guidance animates in or out, a hole to
-  the stock map layer is briefly visible - the map backing (KDK 101/102) is drawn out of sync with the
-  animation. Looks like a timing problem in the show/hide sequence; the backing and the animation need
-  to be synchronised.
-- **Wrong icon for the ramp exit on the projection.** Leaving a ramp draws a three-section arrow that
-  doesn't match the maneuver. Likely an off-ramp mapping bug in `ManeuverMapper` - the projection
-  descriptor for that case needs fixing.
+  the stock map layer was briefly visible - the map backing (KDK 101/102) drawn out of sync with the
+  animation. This branch now drives the backing's opacity and stage from the VC's own FctID 44/54 and
+  keeps the maneuver context until the VC has hidden the KDK; not yet confirmed on the car.
+- **Wrong icon for the ramp exit on the projection.** Leaving a ramp used to draw a three-section
+  arrow. Ramps are now a single slight bend, and off-ramps also draw the continuing road; not yet
+  confirmed on the car.
 
 **Reporting a bad maneuver icon.** The iAP2→BAP mapping covers all 54 CarPlay maneuver types but has
 only been exercised on a limited set of real routes. A snippet of `/tmp/carplay_hook.log` from the
