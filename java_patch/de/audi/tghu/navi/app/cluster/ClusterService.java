@@ -240,9 +240,8 @@ public class ClusterService implements NaviMoKoKDKConstants, PowerEventListener 
             .prepareCombiBAPService(this, combibapservicenavi);
         this.combiBAPListener.setCombiService(effective);
         this.combiBAPServiceNavi = combibapservicenavi;
-        /* CarPlay's map plane may already be live during a cold boot.  Notify the optional
-         * NavStatus wrapper on the exact OSGi service edge instead of making altScreen poll -- or
-         * worse, wait for stock Navigation before showing its own video. */
+        /* Notify the optional NavStatus wrapper on the exact OSGi service edge instead of
+         * polling for the stock CombiBAP service. */
         com.luka.carplay.core.ScreenNavStatusGate.onCombiBAPServiceChanged(this);
     }
 
@@ -378,7 +377,7 @@ public class ClusterService implements NaviMoKoKDKConstants, PowerEventListener 
              * This does not control the VC firmware's distance-widget visibility:
              * CarPlay sends FctID 18 directly through BAPBridge/AppConnectorNavi, and
              * the audited AU491 HMI independently hides distance when BargraphOn != 0.
-             * See docs/cluster-and-rgi/DISTANCE_BARGRAPH.md. */
+             * See docs/rgd/bargraph-sync.md. */
             if (flag && i > 0 && (!this.showBargraph || com.luka.carplay.core.ScreenModule.isConnected())) {
                 Util.setModelStatus(metricsmodelapp, MODEL_STATUS_VALID);
             } else {

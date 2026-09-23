@@ -9,9 +9,8 @@
  * The maneuver overlay (displayable 98, maneuver_render, transparent when idle)
  * composites over the head unit's OWN native map (displayable 33); there is no
  * CarPlay video plane on the cluster.  Every new CarPlay session leaves the cluster
- * on stock (74); we switch to ctx 80 only after RouteGuidance confirms an RGI
- * presentation through BAP and maneuver_render has a rendered frame
- * (setNavActive(true)), and drop back to 74 once VC withdraws KDK visibility (Fct44)
+ * on stock (74); we switch to ctx 80 once RouteGuidance has started the RGI
+ * presentation through BAP (setNavActive(true)), and drop back to 74 once VC withdraws KDK visibility (Fct44)
  * after guidance ends, and on disconnect.
  *
  * The context tables (dc[80]) are declared to the native compositor at init in
@@ -95,7 +94,7 @@ public final class ScreenModule implements Module {
     }
 
     /** Presentation latch, not merely route intent.  RouteGuidance may set true only after the
-     *  current RGI delta has been published through BAP and maneuver_render has confirmed a frame.
+     *  BAP presentation has started (bap.onStart()); the renderer's FRAME_READY is not waited for.
      *  Navigation owns the context; VC alone controls KDK opacity.  On route end, retain the
      *  composition until VC withdraws visibility (Fct44), without a guessed timer. */
     public static void setNavActive(boolean active) {

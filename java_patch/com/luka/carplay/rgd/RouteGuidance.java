@@ -37,8 +37,8 @@ public class RouteGuidance implements CarplayBus.Listener {
     private BAPBridge bap;
     private volatile boolean running;
     private boolean rgActive = false;
-    /* Separate from rgActive: route intent/BAP ownership may already be active while ctx 81 is
-     * still held.  It flips only after BAP update + maneuver renderer FRAME_READY. */
+    /* Separate from rgActive: route intent/BAP ownership may already be active while stock
+     * ctx 74 is still held.  FRAME_READY gates the route-text scroll and cached-state replay. */
     private boolean presentationConfirmed = false;
     /* One WARN per pending episode; the retry runs on every RG update. */
     private boolean bapStartPendingLogged = false;
@@ -459,7 +459,7 @@ public class RouteGuidance implements CarplayBus.Listener {
             rgActive = false;
             presentationConfirmed = false;
             routeWantsActive = false;
-            com.luka.carplay.core.ScreenModule.setNavActive(false);  /* hide layers (ctx 81) */
+            com.luka.carplay.core.ScreenModule.setNavActive(false);  /* hide layers (stock ctx 74) */
             hasRouteUpdate = false;
             state.reset();
             return;
@@ -542,7 +542,7 @@ public class RouteGuidance implements CarplayBus.Listener {
                 com.luka.carplay.core.ScreenModule.setNavActive(rgActive);
                 if (!rgActive) {
                     if (!bapStartPendingLogged) {
-                        Log.w(TAG, "RG activation pending: BAP start did not complete; keeping ctx 81");
+                        Log.w(TAG, "RG activation pending: BAP start did not complete; keeping ctx 74");
                         bapStartPendingLogged = true;
                     }
                     requestPresentationCheck("bap-start-pending");
@@ -560,7 +560,7 @@ public class RouteGuidance implements CarplayBus.Listener {
                 if (bap != null) { bap.onStop(); bap.onRouteEnd(); }
                 rgActive = false;
                 presentationConfirmed = false;
-                /* RGI off -> hide the CarPlay cluster layers (ctx 81 = map only). */
+                /* RGI off -> hide the CarPlay cluster layers (stock ctx 74). */
                 com.luka.carplay.core.ScreenModule.setNavActive(false);
             }
         }

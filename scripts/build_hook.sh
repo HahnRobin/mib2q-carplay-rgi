@@ -2,14 +2,14 @@
 # Build the CarPlay LD_PRELOAD hook (libcarplay_hook.so) for QNX/ARMv7 in Docker.
 #
 # Uses the self-contained image `qnx65-armv7-toolchain` (Tools/qnx-65-sdp-docker,
-# GCC 4.9.4).  The hook links only -lz -lsocket (both in the SDP), so no BSP
+# GCC 8.5).  The hook links only -lz -lsocket (both in the SDP), so no BSP
 # import stubs are needed.
 #
 #   ./scripts/build_hook.sh                        # default (LOG=1)
 #   LOG=0 ./scripts/build_hook.sh                  # logging disabled
 #   LOG_RGD_PACKET_RAW=1 ./scripts/build_hook.sh   # raw RGD logging (needs LOG=1)
 #
-# NOTE: this is GCC 4.9.4, not the stock QNX 4.4.2.  The hook uses no __thread
+# NOTE: this is GCC 8.5, not the stock QNX 4.4.2.  The hook uses no __thread
 # (verified) so the emutls trap does not apply; the build asserts emutls==0 below.
 set -e
 

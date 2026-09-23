@@ -139,8 +139,8 @@ public class CombiMapController extends DisplayControllerEvo implements NaviMoKo
     }
 
     /** Single funnel for the fullscreen/smallscreen axis.  Reads the choice model once, and only on
-     *  a real change (or when forced on connect) publishes it to the altScreen hook + renderer via
-     *  ScreenModule (the view-size cache and its single writer) and repositions the map plane.
+     *  a real change (or when forced on connect) publishes it via ScreenModule (the view-size
+     *  cache and its single writer) and repositions the map plane.
      *  Both the NAV_VIEW_SIZE_CHOICE event and every KDK update route through here, so the cache is
      *  fed even on Classic clusters that drop the event during guidance. */
     private void syncViewSize(boolean force) {
@@ -160,9 +160,8 @@ public class CombiMapController extends DisplayControllerEvo implements NaviMoKo
         }
         this.appliedViewSizeSmall = now;
         /* The Audi View button is the authoritative fullscreen/smallscreen transition.
-         * Publish it to the altScreen hook even while its RTSP session is not up; both Java and C
-         * cache the desired mode.  setViewAreaMode() is the single writer of the view-size cache and
-         * fans out to the renderer, the hook bus and ClusterLayerController.reapply(). */
+         * setViewAreaMode() is the single writer of the view-size cache and notifies its
+         * listener (RouteGuidance). */
         com.luka.carplay.core.ScreenModule.setViewAreaMode(
             smallStage
                 ? com.luka.carplay.core.ScreenModule.VIEWAREA_SMALLSCREEN

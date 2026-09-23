@@ -3,7 +3,7 @@
  *
  * Topology: Java is the long-lived TCP SERVER on 127.0.0.1:19810; the hook is the
  * client and (re)connects once per CarPlay session.  This half both RECEIVES hook
- * events (EVT_*) and SENDS commands (CMD_*, e.g. the altScreen CMD_ALT_* path).
+ * events (EVT_*) and SENDS commands (CMD_*).
  *
  * Wire frame (matches hook/framework/bus.c, all multi-byte big-endian):
  *   [u32 MAGIC][u32 seq][u16 type][u8 flags][u8 reserved][u32 len][payload]

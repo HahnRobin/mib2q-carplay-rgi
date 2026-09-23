@@ -1447,7 +1447,7 @@ public class BAPBridge {
          * - there is no remaining/duration field anywhere in gtf2.  Sending type 0 therefore
          * does not switch the display, it blanks it (ArrivalTime_visible goes false), which is
          * exactly what the smallscreen OK toggle used to do.  See
-         * docs/cluster-and-rgi/KDK_GEOMETRY_AND_ANIMATION.md. */
+         * docs/cluster/kdk-geometry.md. */
         long timeVal = currentArrivalSeconds();
         /* JVM default TZ is UTC on MHI2Q. AppConnectorNavi converts a type-1
          * epoch with GregorianCalendar, so shift it to HU local time first. */

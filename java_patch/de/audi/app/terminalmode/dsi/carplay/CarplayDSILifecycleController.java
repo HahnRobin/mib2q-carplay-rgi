@@ -1027,8 +1027,8 @@ public class CarplayDSILifecycleController extends AbstractDSIController impleme
         public void updateRotary(int i) {
             this.this$0.logger.log(1000000, "[%1.updateRotary] %2", LOGCLASS, i);
             /* updateRotary = the CENTRAL console MMI knob → must drive the CarPlay Main UI
-             * (next/prev). Cluster altScreen zoom comes from the steering-wheel MapScale BAP
-             * callback and is sent as changeMapZoomLevel; it must never use this seam. */
+             * (next/prev). The steering-wheel roller zooms the stock cluster map through its
+             * own MapScale BAP callback; it must never use this seam. */
             this.this$0.dsiCarplaySafe.postRotaryEvent(i);
         }
 
