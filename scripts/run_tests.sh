@@ -53,3 +53,6 @@ python3 scripts/check_local_protocols.py
 
 printf '%-32s ' install_dio_test
 sh scripts/test_install_dio.sh
+
+printf '%-32s ' install_payload_test
+sh scripts/test_install_payload.sh

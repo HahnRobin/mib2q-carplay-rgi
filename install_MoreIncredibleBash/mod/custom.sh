@@ -4,8 +4,11 @@
 # Copy into /mod/ on the M.I.B. SD; resources live in /mod/carplay/.
 #
 # Install:
-#   - whole-file rootfs tree (carplay/root -> "/"): our hook .so, maneuver_render,
-#     its flag atlas, the carplay_*.sh scripts and the jar. No stock file is replaced.
+#   - our files: the hook .so, maneuver_render, its flag atlas, the carplay_*.sh
+#     scripts and the jar. No stock file is replaced. Two layouts, both accepted:
+#       * flat: the release assets dropped straight into carplay/ - each known
+#         name goes to its fixed on-unit path (see flat_dest);
+#       * tree: carplay/root/<on-unit path> copied onto "/".
 #   - in-place runtime patches (per-unit / stock-dependent), done here:
 #       * smartphone_integrator.json  - replace the "carplay" child by path
 #       * dio_manager.json            - register the iAP2 route-guidance message IDs
@@ -26,10 +29,21 @@ if [ ! -d /mnt/app/eso/hmi/lsd ] && [ -d /net/mmx/mnt/app/eso/hmi/lsd ]; then
     exec on -f mmx /bin/sh "$D/custom.sh" "$@"
 fi
 
-RES=$D/carplay                 # resources (carplay_child.json)
-ROOT=$RES/root                 # the "/" tree
+RES=$D/carplay                 # resources (carplay_child.json, flat release assets)
+ROOT=$RES/root                 # optional "/" tree
 ACTION=${1:-install}
-[ -d "$ROOT" ] || { echo "no payload tree at $ROOT"; exit 1; }
+
+HOOKS=/mnt/app/root/hooks
+JARS=/mnt/app/eso/hmi/lsd/jars
+# Flat release asset -> on-unit path. Anything else in carplay/ is ignored.
+flat_dest() {
+    case $1 in
+        libcarplay_hook.so|maneuver_render|flag_atlas.rgba) echo "$HOOKS/$1" ;;
+        carplay_startup.sh|carplay_processes.sh|carplay_cleanup.sh) echo "$HOOKS/$1" ;;
+        carplay_hook.jar) echo "$JARS/$1" ;;
+        *) return 1 ;;
+    esac
+}
 
 CFG=/mnt/system/etc/eso/production/smartphone_integrator.json
 DIO=/mnt/system/etc/eso/production/dio_manager.json
@@ -126,15 +140,25 @@ echo "Remounting app and system read-write..."
 mount -uw /mnt/app    2>/dev/null || true
 mount -uw /mnt/system 2>/dev/null || true
 
+# Payload as "source|destination" lines (/tmp is /dev/shmem: no directories there).
 LIST=/tmp/carplay_files.$$
-( cd "$ROOT" && find . -type f > "$LIST" ) 2>/dev/null || { echo "FAILED listing payload"; rm -f "$LIST"; exit 1; }
+: > "$LIST" || { echo "FAILED create $LIST"; exit 1; }
+for f in "$RES"/*; do
+    [ -f "$f" ] || continue
+    dest=$(flat_dest "${f##*/}") && printf '%s|%s\n' "$f" "$dest" >> "$LIST"
+done
+if [ -d "$ROOT" ]; then
+    ( cd "$ROOT" && find . -type f ) 2>/dev/null | while IFS= read -r f; do
+        case $f in *.DS_Store) continue ;; esac
+        printf '%s|%s\n' "$ROOT/${f#./}" "/${f#./}"
+    done >> "$LIST"
+fi
+[ -s "$LIST" ] || { echo "no payload in $RES (release files or root/ tree)"; rm -f "$LIST"; exit 1; }
 
 case $ACTION in
 install)
-    cd "$ROOT" || { rm -f "$LIST"; exit 1; }
-    while IFS= read -r f; do
-        case $f in *.DS_Store) continue ;; esac
-        dest=/${f#./}; dir=${dest%/*}
+    while IFS='|' read -r f dest; do
+        dir=${dest%/*}
         mkdir -p "$dir" || { echo "FAILED mkdir $dir"; rm -f "$LIST"; exit 1; }
         tmp=$dest.carplay-new.$$
         cp -p "$f" "$tmp" || { echo "FAILED copy $tmp"; rm -f "$tmp" "$LIST"; exit 1; }
@@ -149,10 +173,8 @@ install)
     echo "DONE (install). Reboot the HU to load."
     ;;
 uninstall)
-    cd "$ROOT" || { rm -f "$LIST"; exit 1; }
-    while IFS= read -r f; do
-        case $f in *.DS_Store) continue ;; esac
-        rm -f "/${f#./}"
+    while IFS='|' read -r f dest; do
+        rm -f "$dest"
     done < "$LIST"
     rm -f "$LIST"
     # restore in-place patched configs

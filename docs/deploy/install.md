@@ -93,7 +93,27 @@ install itself.
 ## 💾 Install with M.I.B. (recommended)
 
 **1. Stage the card.** Copy the contents of `install_MoreIncredibleBash/` to the root of the M.I.B.
-SD card, then put the release inside `mod/carplay/`, each file at its on-unit path under `root/`:
+SD card, then put the release into `mod/carplay/`. The simplest way: download **all** assets of a
+GitHub release and drop them straight into `mod/carplay/` - no folders:
+
+```text
+SD1/
+  mod/custom.sh
+  mod/carplay/carplay_child.json
+  mod/carplay/libcarplay_hook.so
+  mod/carplay/maneuver_render
+  mod/carplay/flag_atlas.rgba
+  mod/carplay/carplay_startup.sh
+  mod/carplay/carplay_processes.sh
+  mod/carplay/carplay_cleanup.sh
+  mod/carplay/carplay_hook.jar
+```
+
+`custom.sh` knows where each of these names goes (`/mnt/app/root/hooks/`, the jar to
+`/mnt/app/eso/hmi/lsd/jars/`) and ignores any other file in the folder. A self-built release from
+the repo can use the same flat layout (`build/` outputs, `maneuver_render/resources/flag_atlas.rgba`,
+the four files from `deploy/smartphone_integrator/`), or a tree with each file at its on-unit path
+under `root/`:
 
 ```text
 SD1/
@@ -108,14 +128,15 @@ SD1/
   mod/carplay/root/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar
 ```
 
-`.gitignore` keeps `mod/carplay/root/` and `mod/carplay/carplay_child.json` out of git, so the card
-tree can be staged in place inside the repo.
+`.gitignore` keeps the staged payload out of git, so the card can be staged in place inside the repo.
+Both layouts can be mixed; the flat files are installed first.
 
 **2. Run it.** Disconnect CarPlay, then **GEM -> M.I.B. -> Advanced Settings -> Run Custom Script**.
 If it is started on the RCC it hands itself to the MMX. `custom.sh`:
 
 1. remounts `/mnt/app` and `/mnt/system` read-write;
-2. copies every file under `root/` to the same path under `/`, each through `<file>.carplay-new.<pid>`
+2. copies each flat release file to its fixed path and every file under `root/` to the same path
+   under `/`, each through `<file>.carplay-new.<pid>`
    and an atomic `mv`, and sets its mode (755 for `.so`, `maneuver_render`, `*.sh`; 644 otherwise);
 3. replaces the `"carplay"` child of `smartphone_integrator.json` with `carplay_child.json`, keeping
    the trailing comma, and refuses to write if the child count would change;
@@ -131,7 +152,7 @@ and never overwritten by a patched file.
 
 | Output | Meaning | What to do |
 |---|---|---|
-| `no payload tree at …/carplay/root` | `mod/carplay/root/` is missing | stage the card again |
+| `no payload in …/carplay (release files or root/ tree)` | neither release files nor `root/` found | stage the card again |
 | `WARN no carplay_child.json resource` | JSON patch skipped, the hook will never load | put `carplay_child.json` in `mod/carplay/` and re-run |
 | `WARN unsupported carplay layout` / `expected one carplay child` | SI json not in the stock shape | edit it by hand ([manual step 3](#3-edit-two-config-files)) |
 | `WARN dio_manager.json: …; left as-is` | the ID lists were not found exactly once | add the IDs by hand before rebooting |
