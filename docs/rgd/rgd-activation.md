@@ -120,6 +120,23 @@ stateDiagram-v2
 reroute never reaches Java as a deactivation - any deactivation Java sees is genuine
 (`source_supports_rg=0`, `visible_in_app=0` with no route, or a real route end).
 
+## Which navigation apps send route guidance
+
+The app does not build the iAP2 `RouteGuidanceUpdate`: iOS `CarPlay.framework` serializes it from the
+app's `CPNavigationSession`, and the on/off gate is `SourceSupportsRouteGuidance` (TLV `0x14`), set
+only when the app's map delegate implements `mapTemplateShouldProvideNavigationMetadata:`. From the
+decrypted IPAs (analysis carried over from mhi2-carplay `THIRD_PARTY_NAV_APPS.md`, not tested on the
+car):
+
+| App | Metadata gate | maneuverType | What reaches the cluster |
+|---|---|---|---|
+| Apple / Google Maps | implemented | set | full route guidance |
+| AMap | implemented while navigating | never set | session, ETA and distance; maneuvers are typeless |
+| Waze | never implemented, so `SourceSupportsRouteGuidance = 0` | never set | nothing: `RouteGuidance` deactivates on `source_supports_rg == 0` |
+
+The payload carries no images - only semantics (type, junction shape, angles, distance, strings) -
+which is why [[maneuver-mapping]] draws its own icons. Not fixable from the head unit.
+
 ## Open / to-verify
 
 - (!) `routeState==5` (REROUTING) "accept all maneuvers" path is documented for MHI3 but not

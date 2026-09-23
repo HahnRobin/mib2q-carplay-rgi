@@ -52,20 +52,25 @@ CarPlay patch set for Audi MHI2Q infotainment.
 
 ## Features
 
-What this patch makes the head unit + cluster do that stock MHI2Q doesn't:
+There is nothing to switch on: plug in the iPhone and CarPlay starts as usual; the cluster
+features below follow it automatically.
 
-- **Full HUD route guidance** from CarPlay nav (Maps, Waze, etc.) - maneuver icons, lanes, distance
-  bargraph, ETA and destination.
-- **Custom 3D maneuver overlay** drawn over the cluster's native map plane (the same MOST video plane
-  the HU uses for its own map), transparent when idle: the arrow fills as the maneuver approaches and
-  blinks in step with the HUD, a lane strip appears under it, and it follows the cluster's KDK
-  stage/visibility.
-- **Route text on the cluster** - next road / signpost, scrolled when too long (grapheme-safe, any
-  script).
-- **Album cover art** forwarded to the cluster's now-playing widget.
+- **Turn-by-turn on the cluster.** During CarPlay navigation the Virtual Cockpit shows a 3D maneuver
+  arrow drawn over the cluster's own native map (the stock map stays; there is no CarPlay map on the
+  cluster). The arrow fills as the turn approaches and blinks just before it, lane arrows appear under
+  it, and the cluster also shows distance to the turn, arrival time and remaining distance. Needs an
+  app that sends CarPlay route guidance: Apple Maps and Google Maps do, Waze does not
+  ([details](docs/rgd/rgd-activation.md#which-navigation-apps-send-route-guidance)).
+- **Route text in the Virtual Cockpit.** A text line names the exit sign or the next road (the
+  current road when there is nothing else); long names scroll. Press **OK** (the left steering-wheel
+  roller) to switch it to arrival time and time left, and press again to go back; it returns by itself
+  after 20 s ([details](docs/rgd/vc-route-text.md)).
+- **Head-up display.** The same maneuver icons, lane arrows and distance appear on the HUD.
+- **Steering-wheel roller** keeps zooming the stock cluster map, as without CarPlay.
+- **Cover art on the cluster.** The now-playing album art shows on the cluster media screen.
+- **Parking popups no longer hide CarPlay.** When the Audi front PDC / parking view pops up beside it,
+  CarPlay stays on screen instead of being replaced ([details](docs/hmi/pdc-small-stage.md)).
 - **MMI touchpad → DPAD bridging** so finger drags navigate CarPlay menus.
-- **Steering-wheel roller** - rotation keeps stock map zoom; the OK press toggles the cluster
-  route-info readout (arrival time).
 
 ## Repository layout
 
@@ -218,6 +223,9 @@ Help wanted - open items on the current branch:
   the stock map layer was briefly visible - the map backing (KDK 101/102) drawn out of sync with the
   animation. This branch now drives the backing's opacity and stage from the VC's own FctID 44/54 and
   keeps the maneuver context until the VC has hidden the KDK; not yet confirmed on the car.
+- **Parking popup: black block at the bottom.** Beside the side OPS popup the status line and the
+  "Check surroundings!" drawer are hidden (confirmed on the car); hiding the entertainment drawer's
+  glass plate that remained is host-tested only, not yet confirmed on the car.
 - **Wrong icon for the ramp exit on the projection.** Leaving a ramp used to draw a three-section
   arrow. Ramps are now a single slight bend, and off-ramps also draw the continuing road; not yet
   confirmed on the car.

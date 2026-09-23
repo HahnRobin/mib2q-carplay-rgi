@@ -10,7 +10,7 @@ Map of Content for the reverse-engineering and implementation notes. Each note c
 every factual claim is validated against a source (code / firmware / iOS binary) and states only the
 final verified fact. `reconciles:` frontmatter records which legacy docs were folded in.
 
-> **All topics seeded [x]** - 32 notes. `(!)` items inside notes are real product TODOs, not doc gaps.
+> **All topics seeded [x]** - 33 notes. `(!)` items inside notes are real product TODOs, not doc gaps.
 
 ## [architecture](architecture.md) - process topology, threading, boot / init - build, test & deploy  [x]
 
@@ -22,7 +22,7 @@ final verified fact. `reconciles:` frontmatter records which legacy docs were fo
 
 ## Route guidance - RGD -> BAP  [x]
 - [rgd-tlv](rgd/rgd-tlv.md) - iAP2 RouteGuidanceUpdate TLV map (0x5200-0x5204), whole-message validation, route_generation
-- [rgd-activation](rgd/rgd-activation.md) - route state machine, `visible_in_app`, BAP start -> ctx 80, route-end hold
+- [rgd-activation](rgd/rgd-activation.md) - route state machine, `visible_in_app`, BAP start -> ctx 80, route-end hold, which nav apps send RGI
 - [maneuver-mapping](rgd/maneuver-mapping.md) - full EManeuverType 0-53 -> BAP descriptor
 - [bap-fctids](rgd/bap-fctids.md) - CarPlay-owned FctID matrix + gating
 - [bargraph-sync](rgd/bargraph-sync.md) - FctID 18 bargraph + renderer arrow fill, shared 600 ms blink
@@ -39,6 +39,9 @@ final verified fact. `reconciles:` frontmatter records which legacy docs were fo
 ## Input  [x]
 - [touchpad-dpad](input/touchpad-dpad.md) - MMI touchpad -> DPAD bridge (TouchpadController)
 - [steering-wheel](input/steering-wheel.md) - MFW roller: rotation = stock zoom, press = route-info toggle
+
+## HMI - head-unit screen  [x]
+- [pdc-small-stage](hmi/pdc-small-stage.md) - CarPlay stays beside the side parking (OPS) popup: small stage, message 108, APS drawer, status line
 
 ## Deploy  [x]
 - [install](deploy/install.md) - release contents, M.I.B. installer, manual SSH install, verify, uninstall
