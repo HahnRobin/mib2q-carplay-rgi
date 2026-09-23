@@ -80,9 +80,15 @@ flowchart TB
   class hooks,jars,si_json,dio_json neutral
 ```
 
-**Compatibility.** Any MHI2Q MU firmware should work (developed on MU1316). What matters is a fully
-digital instrument cluster (Audi virtual cockpit; analog clusters are not supported) and, preferably,
-the latest firmware for the unit, flashed before the patch.
+**Compatibility.** The patch is not limited to US, EU or CN units, nor to one MU train: it is
+meant for any MHI2Q MU firmware (developed on MU1316). What matters is:
+
+- a fully digital instrument cluster (Audi virtual cockpit); cars with an analog cluster are not
+  supported;
+- preferably, the latest firmware available for the unit, flashed before installing the patch.
+
+With both in place it should almost certainly work, as long as nothing went wrong during the
+install itself.
 
 ## 💾 Install with M.I.B. (recommended)
 

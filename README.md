@@ -138,9 +138,15 @@ threading, boot and the complete test list live in the knowledge base - see
 
 ## Deployment
 
-**Compatibility.** Any MHI2Q MU firmware should work (developed on MU1316). It needs a fully digital
-instrument cluster (Audi virtual cockpit; analog clusters are not supported) and, preferably, the
-latest firmware for the unit, flashed before installing the patch.
+**Compatibility.** The patch is not limited to US, EU or CN units, nor to one MU train: it is
+meant for any MHI2Q MU firmware (developed on MU1316). What matters is:
+
+- a fully digital instrument cluster (Audi virtual cockpit); cars with an analog cluster are not
+  supported;
+- preferably, the latest firmware available for the unit, flashed before installing the patch.
+
+With both in place it should almost certainly work, as long as nothing went wrong during the
+install itself.
 
 A release is seven files plus two config edits; nothing stock is replaced and no firewall profile is
 touched:
