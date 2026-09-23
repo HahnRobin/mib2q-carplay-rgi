@@ -19,3 +19,9 @@ tools/loader_preview/loader_preview
 **/.obsidian/
 __pycache__/
 output/
+
+# M.I.B. release payload is staged by hand from build/ and deploy/ (see docs/deploy/install.md)
+install_MoreIncredibleBash/mod/carplay/root/
+install_MoreIncredibleBash/mod/carplay/carplay_child.json
+/install_MoreIncredibleBash/mod/last-carplay-*.log
+/uninstall_MoreIncredibleBash/mod/last-carplay-*.log

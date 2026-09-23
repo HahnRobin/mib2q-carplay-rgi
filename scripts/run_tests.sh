@@ -50,3 +50,6 @@ cc -std=c99 -O2 -Wall -Wextra -Werror -Ihook \
 
 printf '%-32s ' local_protocols
 python3 scripts/check_local_protocols.py
+
+printf '%-32s ' install_dio_test
+sh scripts/test_install_dio.sh
