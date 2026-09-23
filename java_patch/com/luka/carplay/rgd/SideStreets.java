@@ -84,7 +84,22 @@ final class SideStreets {
         if (!computesSidestreets(maneuverType, junctionType)) return new int[0];
 
         if (junctionAngles == null || junctionAngles.length == 0) return new int[0];
-        if (exitAngle == EXIT_ANGLE_MISSING) return new int[0];
+        if (exitAngle == EXIT_ANGLE_MISSING || exitAngle == -EXIT_ANGLE_MISSING) return new int[0];
+
+        /* Sentinels are not roads. Zero and a real -1 degree junction remain valid. */
+        int valid = 0;
+        for (int i = 0; i < junctionAngles.length; i++) {
+            if (junctionAngles[i] != EXIT_ANGLE_MISSING && junctionAngles[i] != -EXIT_ANGLE_MISSING) valid++;
+        }
+        if (valid != junctionAngles.length) {
+            int[] filtered = new int[valid];
+            int out = 0;
+            for (int i = 0; i < junctionAngles.length; i++) {
+                int a = junctionAngles[i];
+                if (a != EXIT_ANGLE_MISSING && a != -EXIT_ANGLE_MISSING) filtered[out++] = a;
+            }
+            junctionAngles = filtered;
+        }
 
         /* Unknown junction types: native treats as "no info" and does not compute side streets. */
         if (junctionType != 0 && junctionType != 1) return new int[0];
@@ -278,7 +293,7 @@ final class SideStreets {
     }
 
     private static void sortEntriesByMinDiff(EntryList entries) {
-        /* Insertion sort (small lists, Java 1.2, stable). */
+        /* Insertion sort (small lists, stable). */
         for (int i = 1; i < entries.size(); i++) {
             Entry key = entries.get(i);
             float kd = (key != null) ? key.minDiff : Float.MAX_VALUE;

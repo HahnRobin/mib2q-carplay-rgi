@@ -11,8 +11,8 @@
  * CarPlay video plane on the cluster.  Every new CarPlay session leaves the cluster
  * on stock (74); we switch to ctx 80 only after RouteGuidance confirms an RGI
  * presentation through BAP and maneuver_render has a rendered frame
- * (setNavActive(true)), and drop back to 74 after a bounded hold when guidance ends
- * and on disconnect.
+ * (setNavActive(true)), and drop back to 74 once VC withdraws KDK visibility (Fct44)
+ * after guidance ends, and on disconnect.
  *
  * The context tables (dc[80]) are declared to the native compositor at init in
  * DisplayManagerMIB2High; getMappedInternalContext is identity on MIB2High, so
@@ -40,10 +40,6 @@ public final class ScreenModule implements Module {
     public static final int CTX_STOCK_CLUSTER = 74;
     private static final int CTX_BOUNCE       = 72;   /* kombi map — never ours; forces a real ctx change */
     private static final int BOUNCE_SLEEP_MS  = 180;  /* preContextSwitchHook settle (proven driver) */
-    /* VC drives KDK removal through an asynchronous fade-out completion callback.  That callback is
-     * not exposed to the HU Java process, so keep ctx 80 composed for one bounded fallback interval
-     * before dropping the maneuver/backing planes.  Never sleep on the HMI/BAP caller thread. */
-    private static final long NAV_HIDE_HOLD_MS = 250L;
     private static final long CONTEXT_RECONCILE_MS = 250L;
     private static final int CLUSTER_FPS      = 30;   /* cluster encoder rate; MOST/encoder may cap below this */
     private static final int KOMBI_TYPE_G24   = 4;
@@ -89,7 +85,6 @@ public final class ScreenModule implements Module {
     private static volatile boolean connected = false;
     private static volatile boolean navActive = false;
     private static boolean navHidePending;
-    private static int navHideGeneration;
 
     /** Recompute desiredCtx from connected/navActive and wake the worker. Caller must NOT hold LOCK. */
     private static void republish() {
@@ -101,64 +96,33 @@ public final class ScreenModule implements Module {
 
     /** Presentation latch, not merely route intent.  RouteGuidance may set true only after the
      *  current RGI delta has been published through BAP and maneuver_render has confirmed a frame.
-     *  The stock KDK-visible hint never drives this latch. */
+     *  Navigation owns the context; VC alone controls KDK opacity.  On route end, retain the
+     *  composition until VC withdraws visibility (Fct44), without a guessed timer. */
     public static void setNavActive(boolean active) {
-        if (active) {
-            boolean changed;
-            synchronized (LOCK) {
-                /* A fresh/current presentation wins over an old delayed hide. */
-                navHideGeneration++;
-                navHidePending = false;
-                changed = !navActive;
-                navActive = true;
-            }
-            if (!changed) return;
-            Log.i(TAG, "RGI presentation=true -> ctx 80 (stock map + maneuver)");
-            republish();
-            return;
-        }
-
-        final int generation;
         synchronized (LOCK) {
-            if (!navActive || navHidePending) return;
-            navHidePending = true;
-            generation = ++navHideGeneration;
+            navHidePending = !active && navActive
+                && com.luka.carplay.cluster.ClusterLayerController.isKdkVisible();
+            navActive = active || navHidePending;
         }
-        Log.i(TAG, "RGI presentation=false -> holding ctx 80 for " + NAV_HIDE_HOLD_MS + "ms");
-        Thread hide = new Thread(new Runnable() {
-            public void run() {
-                try { Thread.sleep(NAV_HIDE_HOLD_MS); }
-                catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+        republish();
+    }
 
-                synchronized (LOCK) {
-                    if (!navHidePending || generation != navHideGeneration || !navActive) return;
-                    navHidePending = false;
-                    navActive = false;
-                }
-                Log.i(TAG, "RGI hide hold complete -> ctx 74 (stock)");
-                republish();
+    /** Called after the layer controller has applied the received Fct44 visibility.
+     *  A View fade-out must not release context while the route remains active. */
+    public static void onVcKdkVisibility(boolean visible) {
+        boolean release = false;
+        synchronized (LOCK) {
+            if (!visible && navHidePending) {
+                navHidePending = false;
+                navActive = false;
+                release = true;
             }
-        }, "carplay-rgi-hide-hold");
-        hide.setDaemon(true);
-        try {
-            hide.start();
-        } catch (Throwable t) {
-            boolean changed = false;
-            synchronized (LOCK) {
-                if (navHidePending && generation == navHideGeneration && navActive) {
-                    navHidePending = false;
-                    navActive = false;
-                    changed = true;
-                }
-            }
-            Log.w(TAG, "RGI hide worker start failed; hiding immediately: " + t);
-            if (changed) republish();
         }
+        if (release) republish();
     }
 
     /** The cluster-layer visibility gate read by CombiMapController.  It follows the confirmed BAP
-     *  presentation, except for the intentional 250 ms removal hold, and never follows a stray stock
-     *  KDK-visible bit. */
+     *  presentation and, after route end, VC's own KDK withdrawal; never a stray stock KDK bit. */
     public static boolean isNavActive() { return navActive; }
 
     /* ------------------------------------------------------------
@@ -192,9 +156,6 @@ public final class ScreenModule implements Module {
         boolean small = (mode == VIEWAREA_SMALLSCREEN);
         if (smallScreenViewArea == small) return;
         smallScreenViewArea = small;
-        /* The maneuver plane carries stock's small-stage slide (Layout 80/81); re-apply the KDK
-         * geometry so plane 98 and its backing follow the map's new stage. */
-        com.luka.carplay.cluster.ClusterLayerController.reapply();
         ViewAreaModeListener listener = viewAreaModeListener;
         if (listener != null) {
             try { listener.onViewAreaModeChanged(small ? VIEWAREA_SMALLSCREEN : VIEWAREA_FULLSCREEN); }
@@ -265,7 +226,6 @@ public final class ScreenModule implements Module {
             connected = true;
             navActive = false;
             navHidePending = false;
-            navHideGeneration++;
             desiredCtx = CTX_STOCK_CLUSTER;
         }
         synchronized (LOCK) {
@@ -293,7 +253,6 @@ public final class ScreenModule implements Module {
             connected = false;
             navActive = false;
             navHidePending = false;
-            navHideGeneration++;
         }
         republish();
     }
@@ -305,10 +264,6 @@ public final class ScreenModule implements Module {
     private void switchLoop() {
         contextWriterThread = Thread.currentThread();
         while (true) {
-            /* Live geometry tuning: a saved /tmp/cluster_geom.cfg takes effect within one
-             * reconcile tick, no restart. Absent file = pure stock layout. */
-            if (com.luka.carplay.cluster.ClusterGeomOverride.poll())
-                com.luka.carplay.cluster.ClusterLayerController.reapply();
             int target; IDisplayManager d; boolean reconcileOnly = false;
             synchronized (LOCK) {
                 while (dm == null) {

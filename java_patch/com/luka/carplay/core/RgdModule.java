@@ -26,7 +26,7 @@ final class RgdModule implements Module {
     public boolean start(FrameworkRef fw) {
         if (fw == null || !fw.isReady()) return false;             /* framework not up → retry */
         if (!ScreenModule.isPlatformSupported(fw)) {
-            Log.w(TAG, "disabled on unsupported G24 cluster");
+            Log.w(TAG, "disabled with altScreen on unsupported G24 cluster");
             return true;
         }
 

@@ -52,6 +52,8 @@ docker run --rm \
   printf "%s\n" "$GEN/com/luka/carplay/core/CarPlayApp.java" >> "$SRCLIST"
 
   javac -source 1.4 -target 1.4 -cp "$CP" -sourcepath "$GEN:$SRC" -d "$OUT" -Xlint:-options @"$SRCLIST"
+  # Compact generated metrics/Unicode tables (VC route text) live inside the jar.
+  cp -R /src/java_resources/. "$OUT/"
   (cd "$OUT" && jar cf "$OUTJAR" .)
   rm -rf /src/build/java
 '

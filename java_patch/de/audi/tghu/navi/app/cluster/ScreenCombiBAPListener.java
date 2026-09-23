@@ -10,13 +10,12 @@ import de.audi.tghu.navi.app.audio.AudioStateMachine;
 import de.audi.tghu.navi.app.map.MapManager;
 
 /**
- * Steering-wheel roller listener.
+ * Stock BAP boundary for CarPlay KDK composition.
  *
- * Since the cluster now shows the head unit's own native map (with our maneuver
- * overlay composited on top) rather than a CarPlay video plane, the roller must
- * drive the stock native map scale exactly as stock does — there is no CarPlay
- * video to zoom.  This subclass therefore adds no behaviour of its own; it exists
- * only as the construction seam ClusterService already wires in.
+ * VC's Fct44 (KDK visibility) and Fct54 (map presentation/stage) are forwarded to
+ * the layer controller before stock acknowledges them.  The steering-wheel roller
+ * is NOT intercepted: the cluster shows the head unit's own native map (with our
+ * maneuver overlay on top), so setMapScale() keeps zooming it exactly as stock.
  */
 public final class ScreenCombiBAPListener extends CombiBAPListener {
     public ScreenCombiBAPListener(
@@ -41,5 +40,18 @@ public final class ScreenCombiBAPListener extends CombiBAPListener {
             commandListFactory,
             viewSizeManager
         );
+    }
+
+    /** Apply the accepted stock state before its Status acknowledgement. This boundary
+     * also covers internal supplementary visibility changes and initial Status replay,
+     * which bypass the two-argument BAP request setter. */
+    protected void updateMapVisibility() {
+        com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(this.supplementaryMapViewVisible);
+        super.updateMapVisibility();
+    }
+
+    public void setMapPresentation(boolean largeMapView, boolean leftMenu, boolean rightMenu) {
+        com.luka.carplay.cluster.ClusterLayerController.onVcPresentation(largeMapView);
+        super.setMapPresentation(largeMapView, leftMenu, rightMenu);
     }
 }

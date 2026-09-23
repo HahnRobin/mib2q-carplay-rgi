@@ -9,15 +9,17 @@
  *   101 = stock 987 KDK backing  (Image, 328x180)      — sport/full size
  *   102 = stock 987 KDK backing  (Image, 210x153)      — popup size
  *
- * Visibility is gated on ScreenModule.isNavActive() (== the BAP nav-active message, NOT the stock
- * KDK-visible hint): nav off -> all three transparent, so the panel never shows a stale maneuver or
- * backing.  ctx 80 (ScreenModule) already removes the layers from composition on nav-off; the
+ * CarPlay ownership/navigation gates eligibility; VC FctID44 gates actual visibility,
+ * and VC FctID54 selects the KDK stage. The requested View mode never reveals a layer.
+ * Stock hints are retained for restoration when CarPlay releases the cluster.  ctx 80/81 (ScreenModule) already removes the layers from composition on nav-off; the
  * opacity=0 here is the belt to that suspenders.
  *
  * Geometry comes from the terminal's active stock Layout.  This is important on B9: Classic and
  * Sport use different in-tube anchors/crops, and the stock skin switch changes the Layout object at
  * runtime.  We cache primitive values rather than the Layout itself so reapply() remains safe after
  * a context transition.
+ *
+ * Copyright (c) 2026 LuKa (@LuKa_dev)
  */
 package com.luka.carplay.cluster;
 
@@ -27,7 +29,7 @@ import de.esolutions.hmi.widgets.audi.base.Layout;
 
 public final class ClusterLayerController {
 
-    /* CarPlay cluster displayables (see dc[80] = {98,101,102,33} in DisplayManagerMIB2High). */
+    /* CarPlay cluster displayables (see dc[80] = {98,101,102,99} in DisplayManagerMIB2High). */
     private static final int MANEUVER      = 98;    /* maneuver_render (Software) */
     private static final int BACKING_SPORT = 101;   /* 987 KDK backing, 328x180 */
     private static final int BACKING_POPUP = 102;   /* 987 KDK backing, 210x153 */
@@ -39,20 +41,17 @@ public final class ClusterLayerController {
     private static final int LC_POPUP_CROP_W = 120, LC_POPUP_CROP_H = 121;
     private static final int LC_IN_TUBE_CROP_X = 122, LC_IN_TUBE_CROP_Y = 123;
     private static final int LC_IN_TUBE_CROP_W = 124, LC_IN_TUBE_CROP_H = 125;
-    /* Stock's small-stage (singlescreen) offset.  CombiMapController.positionMap() adds it to the
-     * map planes 33/58 when NAV_VIEW_SIZE_CHOICE == 1.  The stock native map (plane 33) is a full
-     * 1440x542 window stock already translates, so the offset is applied to OUR maneuver plane
-     * 98 and its backing instead — they are what has to follow the map.  Sport = (-476,0),
-     * Classic = (0,0) (LayoutMIB2HighQ7 fallback), so Classic is unaffected for free. */
+    /* Stock map-only offset, recorded for diagnostics; never applied to KDK. */
     private static final int LC_SMALL_STAGE_DX = 80, LC_SMALL_STAGE_DY = 81;
-    /* The VC's KDK fade completion is not exported to HU Java.  Prefer the stock
-     * BITFIELD_KDK_FADED_IN-derived opacity, but never strand a valid CarPlay
-     * presentation invisible if that model delta is lost. */
-    private static final long POPUP_REVEAL_FALLBACK_MS = 250L;
     private static final Object LOCK = new Object();
+    private static final Object APPLY_LOCK = new Object();
     private static IDisplayManagerKombiControl lastDm;
     private static int lastTerminal;
-    private static boolean lastPopup;
+    private static boolean lastStockPopup = true;
+    private static boolean vcPopup = true;
+    private static boolean haveVcStage;
+    private static boolean vcVisible;
+    private static boolean haveVcVisibility;
     private static boolean lastStockVisible;
     private static int lastStockOpacity;
     /* Safe fallback used only before stock CombiMapController publishes its live Layout. */
@@ -64,11 +63,28 @@ public final class ClusterLayerController {
         "fallback-sport");
     private static boolean haveLayout;
     private static boolean errorLogged;
-    private static boolean popupCycleActive;
-    private static boolean popupRevealed;
-    private static boolean popupRevealPending;
     private static String lastAppliedSignature;
-    private static int popupRevealGeneration;
+    private static volatile ViewportListener viewportListener;
+
+    public interface ViewportListener {
+        void onManeuverViewportChanged();
+    }
+
+    public static void setViewportListener(ViewportListener listener) { viewportListener = listener; }
+    public static void clearViewportListener(ViewportListener listener) {
+        if (viewportListener == listener) viewportListener = null;
+    }
+
+    /** Source pixels actually visible on VC, in the renderer's 328x181 frame.
+     * Use the same stage selection and crop as applyNow(), without moving the plane. */
+    public static int[] maneuverViewport() {
+        synchronized (LOCK) {
+            boolean popup = haveVcStage ? vcPopup : lastStockPopup;
+            Geometry g = lastGeometry;
+            return popup ? new int[]{g.popupCropX, g.popupCropY, g.popupCropW, g.popupCropH}
+                : new int[]{g.inTubeCropX, g.inTubeCropY, g.inTubeCropW, g.inTubeCropH};
+        }
+    }
 
     private ClusterLayerController() {}
 
@@ -152,6 +168,11 @@ public final class ClusterLayerController {
             haveLayout = true;
         }
         if (changed) {
+            ViewportListener listener = viewportListener;
+            if (listener != null) {
+                try { listener.onManeuverViewportChanged(); }
+                catch (Throwable t) { Log.w("ClusterLayers", "viewport listener failed: " + t); }
+            }
             Log.i("ClusterLayers", "layout=" + geometry.layoutName
                 + " inTube=(" + geometry.inTubeX + "," + geometry.inTubeY + ") crop=("
                 + geometry.inTubeCropX + "," + geometry.inTubeCropY + ","
@@ -168,10 +189,8 @@ public final class ClusterLayerController {
     public static void bind(IDisplayManagerKombiControl dm, int terminal) {
         synchronized (LOCK) {
             if (lastDm != dm) {
-                lastPopup = true;
                 lastStockVisible = false;
                 lastStockOpacity = 0;
-                resetPopupRevealLocked();
             }
             lastDm = dm;
             lastTerminal = terminal;
@@ -179,33 +198,67 @@ public final class ClusterLayerController {
         }
     }
 
-    /**
-     * Apply the CarPlay cluster plane geometry for one KDK model update.
-     * @param popup true = popup stage (hint&8 == 0); false = in-tube stage (hint&8 != 0).
-     *               Exact crop and size come from the current Classic/Sport Layout.
-     * Reads the nav-active gate itself; never throws into the HMI thread.
-     */
+    /** Single source for acknowledged KDK visibility, independent of CarPlay sessions. */
+    public static boolean isKdkVisible() {
+        synchronized (LOCK) {
+            return haveVcVisibility ? vcVisible : lastStockVisible && lastStockOpacity > 0;
+        }
+    }
+
+    /** Receive accepted FctID44 state before the stock listener sends its Status response. */
+    public static void onVcVisibility(boolean visible) {
+        synchronized (LOCK) {
+            vcVisible = visible;
+            haveVcVisibility = true;
+        }
+        Log.i("ClusterLayers", "VC Fct44 KDK visible=" + visible);
+        reapply();
+        com.luka.carplay.core.ScreenModule.onVcKdkVisibility(visible);
+    }
+
+    /** Receive VC FctID54, emitted at the stage animation midpoint. */
+    public static void onVcPresentation(boolean largeMapView) {
+        boolean changed;
+        synchronized (LOCK) {
+            changed = !haveVcStage || vcPopup != largeMapView;
+            vcPopup = largeMapView;
+            haveVcStage = true;
+        }
+        Log.i("ClusterLayers", "VC Fct54 KDK stage=" + (largeMapView ? "popup" : "inTube"));
+        reapply();
+        if (changed) {
+            ViewportListener listener = viewportListener;
+            if (listener != null) {
+                try { listener.onManeuverViewportChanged(); }
+                catch (Throwable t) { Log.w("ClusterLayers", "viewport listener failed: " + t); }
+            }
+        }
+    }
+
+    /** Cache stock hints for normal-navigation restoration. CarPlay uses the same VC
+     * visibility/presentation inputs, captured before stock availability can mask them. */
     public static void apply(IDisplayManagerKombiControl dm, int terminal, Layout layout,
-                             boolean popup, boolean stockVisible, int stockOpacity) {
+                             boolean stockVisible, int stockOpacity, boolean inTube) {
         updateLayout(dm, terminal, layout);
-        Geometry geometry;
         synchronized (LOCK) {
             lastDm = dm;
             lastTerminal = terminal;
-            lastPopup = popup;
+            lastStockPopup = !inTube;
             lastStockVisible = stockVisible;
             lastStockOpacity = stockOpacity;
             haveLayout = true;
-            geometry = lastGeometry;
         }
-        applyNow(dm, terminal, geometry, popup, stockVisible, stockOpacity);
+        reapply();
     }
 
-    /** Re-apply the last stock KDK geometry after ScreenModule changes ctx 80. */
+    /** Re-apply the last stock KDK geometry after ScreenModule changes ctx 80/81. */
     public static void reapply() {
+        synchronized (APPLY_LOCK) { reapplySerialized(); }
+    }
+
+    private static void reapplySerialized() {
         IDisplayManagerKombiControl dm;
         int terminal;
-        boolean popup;
         boolean stockVisible;
         int stockOpacity;
         Geometry geometry;
@@ -213,44 +266,34 @@ public final class ClusterLayerController {
             if (!haveLayout || lastDm == null) return;
             dm = lastDm;
             terminal = lastTerminal;
-            popup = lastPopup;
             stockVisible = lastStockVisible;
             stockOpacity = lastStockOpacity;
             geometry = lastGeometry;
         }
-        applyNow(dm, terminal, geometry, popup, stockVisible, stockOpacity);
+        applyNow(dm, terminal, geometry, stockVisible, stockOpacity);
     }
 
     private static void applyNow(IDisplayManagerKombiControl dm, int terminal, Geometry geometry,
-                                 boolean popup, boolean stockVisible, int stockOpacity) {
-        /* The caller's stage is the stock KDK hint BITFIELD_KDK_POSITION_IN_TUBE, and during
-         * CarPlay the stock nav sends no KDK model updates at all — so it is a stale cache stuck
-         * at its bind() default (popup).  That is why fullscreen always looked right and every
-         * small-stage view was wrong.
-         *
-         * Derive it the way stock does.  ClusterKDKHandlerImpl.setKDKPositionHints():
-         *     isSmallStageActive() -> addHint(8)     "small stage - kdk in tube"
-         *     else                 -> removeHint(8)  "big stage - kdk in flap"
-         * Small stage is the same axis as NAV_VIEW_SIZE_CHOICE == 1, which we already track.
-         * This is skin-independent: Classic does have an in-tube stage, it just inherits the
-         * 210x153 crop from LayoutMIB2HighQ7 instead of overriding it like Sport's 328x180. */
-        popup = !com.luka.carplay.core.ScreenModule.isSmallScreenViewArea();
-        int forced = ClusterGeomOverride.stage();
-        if (forced == ClusterGeomOverride.STAGE_POPUP) popup = true;
-        else if (forced == ClusterGeomOverride.STAGE_IN_TUBE) popup = false;
-        logDecision(geometry, popup);
+                                 boolean stockVisible, int stockOpacity) {
+        boolean popup;
+        boolean carplayOwnsCluster = com.luka.carplay.core.ScreenModule.isConnected();
+        int permittedOpacity;
+        synchronized (LOCK) {
+            popup = carplayOwnsCluster && haveVcStage ? vcPopup : lastStockPopup;
+            permittedOpacity = haveVcVisibility ? (vcVisible ? 100 : 0)
+                : (stockVisible ? stockOpacity : 0);
+        }
         /* Do NOT apply the layout's small-stage offset (80/81) here.  Stock adds it to the map
          * planes 33/58 only; the KDK panel and its backing have no view-size dependency at all
          * (positionKDKBackgrounds / handleKdkDualTerminal read no view size).  Moving the panel
          * by -476 in Sport singlescreen was measured on the car to break a view that stock keeps
          * correct.  The offset is logged below for diagnosis, never applied. */
-        boolean carplayOwnsCluster = com.luka.carplay.core.ScreenModule.isConnected();
         boolean navActive = com.luka.carplay.core.ScreenModule.isNavActive();
-        int carplayOpacity = resolveCarPlayOpacity(carplayOwnsCluster, navActive, popup,
-                                                   stockVisible, stockOpacity);
+        int carplayOpacity = carplayOwnsCluster && navActive ? permittedOpacity : 0;
+        logDecision(geometry, popup, carplayOpacity);
         try {
             /* 101/102 are shared with the stock KDK renderer.  Restore the last stock model
-             * atomically when CarPlay releases terminal 1; otherwise a disconnect can leave
+             * when CarPlay releases terminal 1; otherwise a disconnect can leave
              * Audi navigation's backing permanently transparent until an unrelated KDK delta. */
             if (!carplayOwnsCluster) {
                 dm.setOpacity(MANEUVER, terminal, 0);
@@ -272,33 +315,20 @@ public final class ClusterLayerController {
                 dm.setOpacity(BACKING_POPUP, terminal, 0);
                 return;
             }
-            if (popup) {
-                /* Popup crop/anchor from the active OEM Layout. */
-                int cx = ClusterGeomOverride.popupCropX(geometry.popupCropX);
-                int cy = ClusterGeomOverride.popupCropY(geometry.popupCropY);
-                int cw = ClusterGeomOverride.popupCropW(geometry.popupCropW);
-                int ch = ClusterGeomOverride.popupCropH(geometry.popupCropH);
-                int dx = ClusterGeomOverride.popupX(geometry.popupX);
-                int dy = ClusterGeomOverride.popupY(geometry.popupY);
-                dm.setCropping(MANEUVER, terminal, cx, cy, cw, ch, dx, dy, cw, ch);
-                dm.setOpacity(MANEUVER, terminal, carplayOpacity);
-                dm.setPosition(BACKING_POPUP, terminal, dx, dy);
-                dm.setOpacity(BACKING_POPUP, terminal, carplayOpacity);
-                dm.setOpacity(BACKING_SPORT, terminal, 0);
-            } else {
-                /* In-tube crop/anchor differs between Classic and Sport layouts. */
-                int cx = ClusterGeomOverride.inTubeCropX(geometry.inTubeCropX);
-                int cy = ClusterGeomOverride.inTubeCropY(geometry.inTubeCropY);
-                int cw = ClusterGeomOverride.inTubeCropW(geometry.inTubeCropW);
-                int ch = ClusterGeomOverride.inTubeCropH(geometry.inTubeCropH);
-                int dx = ClusterGeomOverride.inTubeX(geometry.inTubeX);
-                int dy = ClusterGeomOverride.inTubeY(geometry.inTubeY);
-                dm.setCropping(MANEUVER, terminal, cx, cy, cw, ch, dx, dy, cw, ch);
-                dm.setOpacity(MANEUVER, terminal, 100);
-                dm.setPosition(BACKING_SPORT, terminal, dx, dy);
-                dm.setOpacity(BACKING_SPORT, terminal, 100);
-                dm.setOpacity(BACKING_POPUP, terminal, 0);
-            }
+            // One composition path for both stock stages; visibility is independent.
+            int cx = popup ? geometry.popupCropX : geometry.inTubeCropX;
+            int cy = popup ? geometry.popupCropY : geometry.inTubeCropY;
+            int cw = popup ? geometry.popupCropW : geometry.inTubeCropW;
+            int ch = popup ? geometry.popupCropH : geometry.inTubeCropH;
+            int dx = popup ? geometry.popupX : geometry.inTubeX;
+            int dy = popup ? geometry.popupY : geometry.inTubeY;
+            int backing = popup ? BACKING_POPUP : BACKING_SPORT;
+            int otherBacking = popup ? BACKING_SPORT : BACKING_POPUP;
+            dm.setCropping(MANEUVER, terminal, cx, cy, cw, ch, dx, dy, cw, ch);
+            dm.setOpacity(MANEUVER, terminal, carplayOpacity);
+            dm.setPosition(backing, terminal, dx, dy);
+            dm.setOpacity(backing, terminal, carplayOpacity);
+            dm.setOpacity(otherBacking, terminal, 0);
             errorLogged = false;
         } catch (Throwable t) {
             /* Never throw into HMI/DM threads, but keep the first failure diagnosable. */
@@ -312,31 +342,26 @@ public final class ClusterLayerController {
     /** One line per distinct geometry decision — the exact numbers written to the DM.
      *  Every Classic/Sport/singlescreen bug so far was a guess about which branch ran; this makes
      *  it readable in /tmp/carplay_java.log instead. Logged only when the tuple changes. */
-    private static void logDecision(Geometry g, boolean popup) {
-        int cropX = popup ? ClusterGeomOverride.popupCropX(g.popupCropX)
-                          : ClusterGeomOverride.inTubeCropX(g.inTubeCropX);
-        int cropY = popup ? ClusterGeomOverride.popupCropY(g.popupCropY)
-                          : ClusterGeomOverride.inTubeCropY(g.inTubeCropY);
-        int cropW = popup ? ClusterGeomOverride.popupCropW(g.popupCropW)
-                          : ClusterGeomOverride.inTubeCropW(g.inTubeCropW);
-        int cropH = popup ? ClusterGeomOverride.popupCropH(g.popupCropH)
-                          : ClusterGeomOverride.inTubeCropH(g.inTubeCropH);
-        int dstX  = popup ? ClusterGeomOverride.popupX(g.popupX)
-                          : ClusterGeomOverride.inTubeX(g.inTubeX);
-        int dstY  = popup ? ClusterGeomOverride.popupY(g.popupY)
-                          : ClusterGeomOverride.inTubeY(g.inTubeY);
+    private static void logDecision(Geometry g, boolean popup, int opacity) {
+        int cropX = popup ? g.popupCropX : g.inTubeCropX;
+        int cropY = popup ? g.popupCropY : g.inTubeCropY;
+        int cropW = popup ? g.popupCropW : g.inTubeCropW;
+        int cropH = popup ? g.popupCropH : g.inTubeCropH;
+        int dstX  = popup ? g.popupX     : g.inTubeX;
+        int dstY  = popup ? g.popupY     : g.inTubeY;
 
         String line = "apply " + g.layoutName
             + " view=" + (com.luka.carplay.core.ScreenModule.isSmallScreenViewArea()
                           ? "single" : "full")
             + " stage=" + (popup ? "popup" : "inTube")
             + " backing=" + (popup ? BACKING_POPUP : BACKING_SPORT)
+            + " opacity=" + opacity
             + " src=(" + cropX + "," + cropY + " " + cropW + "x" + cropH + ")"
             + " dst=(" + dstX + "," + dstY + ")"
             + " smallStageOffset=(" + g.smallStageDX + "," + g.smallStageDY + ") [not applied]";
 
         /* Every value that can change the picture is in the line, so comparing the line itself
-         * is both the dedup key and the guarantee that a /tmp/cluster_geom.cfg edit re-logs. */
+         * is the dedup key. */
         synchronized (LOCK) {
             if (line.equals(lastAppliedSignature)) return;
             lastAppliedSignature = line;
@@ -344,90 +369,4 @@ public final class ClusterLayerController {
         Log.i("ClusterLayers", line);
     }
 
-    /** Resolve one shared opacity for the maneuver and its backing.
-     *
-     * Popup/fullscreen has the stock KDK slide/fade: wait until the stock model
-     * reports FADED_IN, with a bounded fallback if that delta never arrives.
-     * Sport/dual has no popup slide and is intentionally immediate.  Once a
-     * popup has been revealed, keep it visible through the 250 ms removal hold;
-     * a stock fade-out delta must not tear the backing away early. */
-    private static int resolveCarPlayOpacity(boolean owns, boolean navActive, boolean popup,
-                                             boolean stockVisible, int stockOpacity) {
-        int startGeneration = -1;
-        int opacity;
-        boolean synchronizedToStock = false;
-        synchronized (LOCK) {
-            if (!owns || !navActive || !popup) {
-                resetPopupRevealLocked();
-                return (owns && navActive) ? 100 : 0;
-            }
-
-            if (!popupCycleActive) {
-                popupCycleActive = true;
-                popupRevealed = false;
-                popupRevealPending = false;
-                popupRevealGeneration++;
-            }
-
-            /* kdkOpacity is retained by stock when NO_KDK is selected, so the
-             * opacity alone may be a stale 100 from the previous route. */
-            if (!popupRevealed && stockVisible && stockOpacity > 0) {
-                popupRevealed = true;
-                popupRevealPending = false;
-                popupRevealGeneration++;       /* cancel a pending fallback */
-                synchronizedToStock = true;
-            } else if (!popupRevealed && !popupRevealPending) {
-                popupRevealPending = true;
-                startGeneration = ++popupRevealGeneration;
-            }
-            opacity = popupRevealed ? 100 : 0;
-        }
-
-        if (synchronizedToStock)
-            Log.i("ClusterLayers", "popup reveal synchronized to stock KDK opacity");
-        if (startGeneration >= 0) startPopupRevealFallback(startGeneration);
-        return opacity;
-    }
-
-    private static void resetPopupRevealLocked() {
-        if (popupCycleActive || popupRevealPending || popupRevealed) popupRevealGeneration++;
-        popupCycleActive = false;
-        popupRevealed = false;
-        popupRevealPending = false;
-    }
-
-    private static void startPopupRevealFallback(final int generation) {
-        Thread reveal = new Thread(new Runnable() {
-            public void run() {
-                try { Thread.sleep(POPUP_REVEAL_FALLBACK_MS); }
-                catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
-
-                synchronized (LOCK) {
-                    if (!popupCycleActive || !popupRevealPending
-                            || generation != popupRevealGeneration || popupRevealed) return;
-                    popupRevealPending = false;
-                    popupRevealed = true;
-                }
-                Log.i("ClusterLayers", "popup reveal fallback after "
-                    + POPUP_REVEAL_FALLBACK_MS + "ms");
-                reapply();
-            }
-        }, "carplay-popup-reveal");
-        reveal.setDaemon(true);
-        try {
-            reveal.start();
-        } catch (Throwable t) {
-            boolean apply = false;
-            synchronized (LOCK) {
-                if (popupCycleActive && popupRevealPending
-                        && generation == popupRevealGeneration && !popupRevealed) {
-                    popupRevealPending = false;
-                    popupRevealed = true;
-                    apply = true;
-                }
-            }
-            Log.w("ClusterLayers", "popup reveal worker start failed; revealing immediately: " + t);
-            if (apply) reapply();
-        }
-    }
 }

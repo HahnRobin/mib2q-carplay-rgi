@@ -1,44 +1,11 @@
-/*
- * CarPlay Touchpad Input Controller
- *
- * (Class name is legacy — this was originally an on-screen cursor state
- *  machine.  The cursor rendering was dropped after MU1316 turned out
- *  to ghost it through H.264 motion compensation, and the two-finger
- *  PAN/PINCH code was dropped after the log confirmed the Audi MMI
- *  touchpad on this unit only ever emits single-finger events via
- *  updateTouchEvents(TouchEvent[]).  File / class / package kept the
- *  same to minimise ripple through the DSI patch imports.  See memory
- *  `project_cursor_ghost_architectural_block` for the cursor ghost
- *  post-mortem.)
- *
- * Input model — single finger only
- *
- *   One finger  → DPAD ticks.  Accumulate Δx, Δy since the last emit;
- *                 whenever |Δx| or |Δy| crosses the (speed-adaptive)
- *                 threshold, emit a DDS_LEFT/RIGHT/UP/DOWN press+release
- *                 pair through TouchSink.postDpad and subtract the
- *                 threshold from the accumulator.  A long drag emits
- *                 multiple ticks so the user can traverse several list
- *                 items in one gesture.  Axes are independent — a
- *                 diagonal drag emits both X and Y ticks when both
- *                 accumulators cross threshold.
- *
- *   Knob (DDS_SELECT) — stock passthrough: press = focus-confirm in
- *                 whatever CarPlay element the dpad navigated to.  Not
- *                 intercepted by this controller.
- *
- * Multi-finger events are ignored (treated as touch-end).  If the
- * MMI touchpad ever starts reporting them, the DSI patch forwards
- * them here and we simply reset the single-finger state so a spurious
- * two-finger sample can't arm a dpad emission.
- *
- * Java 1.2 compatible: no generics, no lambdas, no java.util.Timer.
- */
-package com.luka.carplay.cursor;
+/* Single-finger MMI touchpad movement produces speed-adaptive DPAD ticks.
+ * Knob selection and touchscreen input use the stock DSI paths.
+ * Java 1.4 / Foundation 1.1. Copyright (c) 2026 LuKa (@LuKa_dev). */
+package com.luka.carplay.input;
 
 import com.luka.carplay.framework.Log;
 
-public class CursorController {
+public class TouchpadController {
 
     private static final String TAG = "InputCtrl";
 
@@ -56,8 +23,8 @@ public class CursorController {
      * after arm, only the current adaptive threshold matters. */
     private static final int DPAD_THRESHOLD_FAST = 150;
     private static final int DPAD_THRESHOLD_SLOW = 200;
-    /* Speed axis is "touchpad units per 100 ms" (integer to stay
-     * Java-1.2 friendly; no doubles in the hot path).  Samples arrive
+    /* Speed axis is "touchpad units per 100 ms" (integer; no doubles in
+     * the hot path).  Samples arrive
      * every ~30 ms so speeds in the 30..400 range are typical. */
     private static final int SPEED_FAST          = 300;  /* ≥ → full sweep */
     private static final int SPEED_SLOW          = 100;  /* ≤ → full precision */
@@ -87,10 +54,10 @@ public class CursorController {
     /* ============================================================
      * Singleton
      * ============================================================ */
-    private static final CursorController INSTANCE = new CursorController();
-    public static CursorController getInstance() { return INSTANCE; }
+    private static final TouchpadController INSTANCE = new TouchpadController();
+    public static TouchpadController getInstance() { return INSTANCE; }
 
-    private CursorController() { }
+    private TouchpadController() { }
 
     /* ============================================================
      * State (access synchronised on 'this')

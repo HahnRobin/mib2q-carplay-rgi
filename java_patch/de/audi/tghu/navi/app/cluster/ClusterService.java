@@ -241,7 +241,7 @@ public class ClusterService implements NaviMoKoKDKConstants, PowerEventListener 
         this.combiBAPListener.setCombiService(effective);
         this.combiBAPServiceNavi = combibapservicenavi;
         /* CarPlay's map plane may already be live during a cold boot.  Notify the optional
-         * NavStatus wrapper on the exact OSGi service edge instead of making the cluster module poll -- or
+         * NavStatus wrapper on the exact OSGi service edge instead of making altScreen poll -- or
          * worse, wait for stock Navigation before showing its own video. */
         com.luka.carplay.core.ScreenNavStatusGate.onCombiBAPServiceChanged(this);
     }
@@ -374,11 +374,11 @@ public class ClusterService implements NaviMoKoKDKConstants, PowerEventListener 
                 metricsmodelapp.setMetric(this.distanceToManeuver);
             }
 
-            /* FctID 18: distance number and bargraph are INDEPENDENT records in the BAP spec and
-             * must be able to render together.  Stock gated the distance-valid status on
-             * !showBargraph, making them mutually exclusive (distance vanished whenever the
-             * bargraph was active).  Drop the !showBargraph term so the number stays valid
-             * alongside the bargraph.  (Model 65 bargraph value is set independently below.) */
+            /* Keep this HU Java distance model valid alongside model 65 during CarPlay.
+             * This does not control the VC firmware's distance-widget visibility:
+             * CarPlay sends FctID 18 directly through BAPBridge/AppConnectorNavi, and
+             * the audited AU491 HMI independently hides distance when BargraphOn != 0.
+             * See docs/cluster-and-rgi/DISTANCE_BARGRAPH.md. */
             if (flag && i > 0 && (!this.showBargraph || com.luka.carplay.core.ScreenModule.isConnected())) {
                 Util.setModelStatus(metricsmodelapp, MODEL_STATUS_VALID);
             } else {
@@ -1094,8 +1094,7 @@ public class ClusterService implements NaviMoKoKDKConstants, PowerEventListener 
 
     /* ============================================================
      * CarPlay hook accessors (patched-in; avoid reflection in BAPBridge).
-     * Graft onto combined-final stock — env/combiBAPListener/refreshRGIValid
-     * are the same members the stock already exposes.
+     * env/combiBAPListener/refreshRGIValid are existing stock members.
      * ============================================================ */
 
     public DSIResponseContainer getDSIResponseContainer() {
@@ -1118,4 +1117,7 @@ public class ClusterService implements NaviMoKoKDKConstants, PowerEventListener 
     /** Restore the authoritative stock INITIALIZING/NORMAL decision after CarPlay releases the
      * cluster.  A deferred-call replay alone is insufficient when no map-ready edge occurred while
      * the takeover was active. */
+    public synchronized void refreshInitializingScreenAfterCarPlay() {
+        this.combiBAPListener.forceShowInitScreen(this.initScreenNeededOnKombi());
+    }
 }

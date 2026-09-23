@@ -12,7 +12,7 @@
  * until everything is up or the CarPlay generation ends.  Navigation can appear
  * much later than TerminalMode on a cold boot, so this must not have a fixed timeout.
  *
- * Java 1.2 (no generics/autoboxing).
+ * Java 1.4 / Foundation 1.1 (no generics/autoboxing).
  *
  * Copyright (c) 2026 LuKa (@LuKa_dev)
  */
@@ -28,8 +28,7 @@ public final class CarPlayApp {
     private static final String TAG = "App";
     public static final String BUILD_ID = "@BUILD_ID@";
 
-    /* Modules, in start order.  Populated as each module lands (rgd, coverart,
-     * input, screen). */
+    /* Modules, in start order. */
     private static final Module[] MODULES = new Module[] {
         new ScreenModule(), new RgdModule(), new SteeringWheelInputModule()
     };
@@ -50,8 +49,7 @@ public final class CarPlayApp {
 
     private CarPlayApp() {}
 
-    /** Current HMI framework access, or null before activate / after deactivate.
-     *  Replaces the old CarPlayHook.getFrameworkAccess() static seam. */
+    /** Current HMI framework access, or null before activate / after deactivate. */
     public static IFrameworkAccess framework() {
         FrameworkRef r = fwRef;
         return r != null ? r.framework() : null;
@@ -180,29 +178,40 @@ public final class CarPlayApp {
     private static void applyLifecycle(int generation, boolean wantActive,
                                        IContext context) {
         synchronized (lifecycleLock) {
-            if (!lifecycleCurrent(generation, wantActive, context)) return;
-            stopRetry();
+            try {
+                if (!lifecycleCurrent(generation, wantActive, context)) return;
+                stopRetry();
 
-            if (!wantActive) {
-                Log.i(TAG, "onDeactivate async apply generation=" + generation);
+                if (!wantActive) {
+                    Log.i(TAG, "onDeactivate async apply generation=" + generation);
+                    stopModules();
+                    return;
+                }
+
+                /* FrameworkRef construction calls into stock IContext and therefore
+                 * also belongs here, not on ActiveDeviceStateListener. */
+                FrameworkRef next = new FrameworkRef(context);
+                if (!lifecycleCurrent(generation, true, context)) return;
+                synchronized (lock) { fwRef = next; }
+
+                Log.i(TAG, "onActivate async apply generation=" + generation
+                    + " build=" + BUILD_ID);
+                CarplayBus.getInstance().start();        /* idempotent; off stock lifecycle thread */
                 stopModules();
-                return;
-            }
-
-            /* FrameworkRef construction calls into stock IContext and therefore
-             * also belongs here, not on ActiveDeviceStateListener. */
-            FrameworkRef next = new FrameworkRef(context);
-            if (!lifecycleCurrent(generation, true, context)) return;
-            synchronized (lock) { fwRef = next; }
-
-            Log.i(TAG, "onActivate async apply generation=" + generation
-                + " build=" + BUILD_ID);
-            CarplayBus.getInstance().start();        /* idempotent; off stock lifecycle thread */
-            stopModules();
-            if (!lifecycleCurrent(generation, true, context)) return;
-            if (!startPass(generation)
-                    && lifecycleCurrent(generation, true, context)) {
-                startRetry(generation);
+                if (!lifecycleCurrent(generation, true, context)) return;
+                if (!startPass(generation)
+                        && lifecycleCurrent(generation, true, context)) {
+                    startRetry(generation);
+                }
+            } finally {
+                synchronized (lock) {
+                    /* Publish before releasing lifecycleLock: a Navigation worker
+                     * waiting for this activation must not discard its edge in
+                     * a gap between module startup and generation publication.
+                     * External module calls remain outside this smaller lock. */
+                    lifecycleAppliedGeneration = generation;
+                    lock.notifyAll();
+                }
             }
         }
     }
@@ -250,14 +259,6 @@ public final class CarPlayApp {
                 applyLifecycle(generation, wantActive, context);
             } catch (Throwable t) {
                 Log.e(TAG, "lifecycle apply failed generation=" + generation + ": " + t);
-            } finally {
-                synchronized (lock) {
-                    /* If a newer request arrived while external code ran, mark
-                     * only this snapshot applied; the loop immediately observes
-                     * the newer generation and coalesces to its final state. */
-                    lifecycleAppliedGeneration = generation;
-                    lock.notifyAll();
-                }
             }
         }
     }

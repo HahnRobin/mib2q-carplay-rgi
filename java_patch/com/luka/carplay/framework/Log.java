@@ -18,7 +18,8 @@ public final class Log {
      * worth having while diagnosing (session start, module ready, context/geometry decisions);
      * it stays compiled in and is switched on without a rebuild - and without a unit reboot -
      * by `touch /mnt/app/carplay_verbose` or /tmp/carplay_verbose. */
-    private static final String VERBOSE_MARKERS = "/mnt/app/carplay_verbose:/tmp/carplay_verbose";
+    private static final String VERBOSE_MARKERS =
+        "/mnt/app/carplay_verbose:/tmp/carplay_verbose";
     private static int level = resolveInitialLevel();
 
     private static int resolveInitialLevel() {
