@@ -8,7 +8,8 @@ CarPlay patch set for Audi MHI2Q infotainment.
 ## Gallery
 
 <p align="center">
-  <img src="assets/gallery/IMG_0082_39-45.gif" width="90%" />
+  <img src="assets/gallery/maneuver_demo.gif" width="90%" /><br />
+  <sub>Cluster maneuver renderer driven through a demo route</sub>
 </p>
 <p align="center">
   <img src="assets/gallery/IMG_0623.jpeg" width="45%" />
