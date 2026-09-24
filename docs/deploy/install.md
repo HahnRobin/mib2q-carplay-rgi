@@ -5,6 +5,7 @@ status: verified-source
 sources:
   - code: install_MoreIncredibleBash/mod/custom.sh
   - code: uninstall_MoreIncredibleBash/mod/custom.sh
+  - code: install_MoreIncredibleBash/mod/command.sh
   - code: scripts/test_install_dio.sh
   - code: deploy/smartphone_integrator/carplay_child.json
   - code: maneuver_render/main.c
@@ -99,6 +100,7 @@ GitHub release and drop them straight into `mod/carplay/` - no folders:
 ```text
 SD1/
   mod/custom.sh
+  mod/command.sh
   mod/carplay/carplay_child.json
   mod/carplay/libcarplay_hook.so
   mod/carplay/maneuver_render
@@ -118,6 +120,7 @@ under `root/`:
 ```text
 SD1/
   mod/custom.sh
+  mod/command.sh
   mod/carplay/carplay_child.json                   from deploy/smartphone_integrator/
   mod/carplay/root/mnt/app/root/hooks/libcarplay_hook.so
   mod/carplay/root/mnt/app/root/hooks/maneuver_render
@@ -131,8 +134,18 @@ SD1/
 `.gitignore` keeps the staged payload out of git, so the card can be staged in place inside the repo.
 Both layouts can be mixed; the flat files are installed first.
 
-**2. Run it.** Disconnect CarPlay, then **GEM -> M.I.B. -> Advanced Settings -> Run Custom Script**.
-If it is started on the RCC it hands itself to the MMX. `custom.sh`:
+**2. Run it.** Disconnect CarPlay, then **GEM -> M.I.B. -> Advanced Settings** and pick the script
+entry your M.I.B. shows:
+
+| M.I.B. | Entry | Runs |
+|---|---|---|
+| `main` since `e531867` (2024-07-05) | **Run Custom Script** | `/mod/custom.sh` |
+| release zips up to V3.7.1 | **Run individual script** | `/mod/command.sh`, which forwards to `custom.sh` |
+
+The card is FAT and cannot hold a symlink, so `command.sh` is a two-line forwarder; when the M.I.B.
+launcher sources it while installing M.I.B. itself, it does nothing. With `custom.sh` alone a release
+M.I.B. prints "Nothing to do!". If the script is started on the RCC it hands itself to the MMX.
+`custom.sh`:
 
 1. remounts `/mnt/app` and `/mnt/system` read-write;
 2. copies each flat release file to its fixed path and every file under `root/` to the same path
@@ -366,7 +379,8 @@ hook logs nothing about them.
 
 **With M.I.B.:** copy `uninstall_MoreIncredibleBash/` over the card and run the custom script. It
 needs no payload tree: it renames every `*.carplay-stock` under `/mnt/app` and `/mnt/system` back to
-the original (the SI json and `dio_manager.json`), then deletes the seven owned files. `custom.sh
+the original (the SI json and `dio_manager.json`), then deletes the seven owned files and the
+renderer's shader cache `/mnt/persist/var/app/luka_carplay_maneuver`. `custom.sh
 uninstall` from the install card is a second path while the payload tree is still on it.
 
 **By hand:**
@@ -378,6 +392,7 @@ mv $F/smartphone_integrator.json.carplay-stock $F/smartphone_integrator.json
 mv $F/dio_manager.json.carplay-stock $F/dio_manager.json
 cd /mnt/app/root/hooks && rm -f libcarplay_hook.so maneuver_render flag_atlas.rgba carplay_startup.sh carplay_processes.sh carplay_cleanup.sh
 rm -f /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar
+rm -rf /mnt/persist/var/app/luka_carplay_maneuver
 sync
 ```
 

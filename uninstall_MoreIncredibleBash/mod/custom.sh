@@ -48,5 +48,8 @@ for f in $OWNED; do
     [ -e "$f" ] && rm -f "$f" && echo "  removed $f"
 done
 
+# renderer GL program-binary cache (common/gl_program_cache.h)
+rm -rf /mnt/persist/var/app/luka_carplay_maneuver
+
 sync
 echo "DONE (uninstall). Reboot the HU."

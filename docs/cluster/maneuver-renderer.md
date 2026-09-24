@@ -101,6 +101,20 @@ maneuver (immutable input + generation); geometry it cannot fit falls back to th
 family (side roads, roundabouts, arrival flag, elevation). The arrow fill/blink is `arrow_progress.h`;
 the progress state comes from the wire and is only eased locally.
 
+## 💾 Shader cache
+
+The Adreno 320 driver compiles GLSL through `libllvm-qcom` at every launch, so the first start after
+each boot paid for every program. `common/gl_program_cache.h` saves each linked program with
+`GL_OES_get_program_binary` to `/mnt/persist/var/app/luka_carplay_maneuver/` and later launches load
+it instead of compiling. The key is FNV-1a 64 of tag (attribute bindings) + both sources +
+`GL_RENDERER` + `GL_VERSION`, so a new shader or a firmware driver update misses; a rejected, corrupt
+or foreign binary is deleted and recompiled. No offline compiler exists for this driver, so the cache
+fills itself on the unit on the first launch. The uninstaller removes the directory.
+
+Renderer milestones (`starting`, `EGL`, `connected`) and every Java log line carry an
+`HH:MM:SS.mmm` stamp on the same clock as the hook log; the renderer retries the Java socket every
+200 ms instead of 1 s.
+
 ## ⚠️ Robustness
 
 - **Progress watchdog** - a thread watches the render loop's progress counter; with no progress for
@@ -118,4 +132,5 @@ the progress state comes from the wire and is only eased locally.
 the scene archive with `g++`, links `build/maneuver_render` against synthesized Screen/EGL/GLES stubs,
 and rejects any non-ARM or emutls-carrying binary. On macOS `make -C maneuver_render` builds the GLFW
 dev renderer + harness. Host tests: `scripts/test_maneuver_native.sh` (lane decoder, scene engine,
-maneuver parity under ASan/UBSan) and the C tests in `scripts/run_tests.sh`.
+maneuver parity under ASan/UBSan) and the C tests in `scripts/run_tests.sh` (including `gl_program_cache_test`: store, hit, miss on a
+changed source or binding, driver reject, corrupt file, no save after a failed link).

@@ -170,7 +170,8 @@ iOS sends route guidance and the SDK silently drops it.
 
 **With M.I.B. (recommended).** Copy `install_MoreIncredibleBash/` to the M.I.B. SD card and drop
 **all assets of a release** straight into `mod/carplay/` (the seven files above plus
-`carplay_child.json`; no folders needed), then run **GEM -> M.I.B. -> Advanced Settings -> Run Custom Script** with CarPlay disconnected. `custom.sh`
+`carplay_child.json`; no folders needed), then run **GEM -> M.I.B. -> Advanced Settings -> Run Custom Script** (**Run individual script** on
+M.I.B. release zips up to V3.7.1) with CarPlay disconnected. `custom.sh`
 copies the tree with atomic renames, patches both configs in place and keeps a `.carplay-stock`
 backup of each; it never stops processes or reboots. To remove everything, run
 `uninstall_MoreIncredibleBash/` the same way.

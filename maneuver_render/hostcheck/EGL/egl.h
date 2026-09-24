@@ -47,4 +47,6 @@ EGLint     eglGetError(void);
 EGLBoolean eglBindAPI(EGLint);
 const char *eglQueryString(EGLDisplay, EGLint);
 
+typedef void (*__eglMustCastToProperFunctionPointerType)(void);
+__eglMustCastToProperFunctionPointerType eglGetProcAddress(const char *name);
 #endif

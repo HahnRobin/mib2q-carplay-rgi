@@ -15,6 +15,11 @@ cc -std=gnu99 -O1 -Wall -Wextra -Werror -Wno-unused-function \
     tests/maneuver_surface_test.c "$DEAD_STRIP" -lpthread -lm -o "$OUT/maneuver_surface"
 "$OUT/maneuver_surface"
 
+printf '%-32s ' gl_program_cache_test
+cc -std=gnu99 -O1 -Wall -Wextra -Werror -Wno-unused-function \
+    -Imaneuver_render/hostcheck -Icommon tests/gl_program_cache_test.c -o "$OUT/gl_program_cache"
+"$OUT/gl_program_cache"
+
 printf '%-32s ' rgd_tlv_test
 cc -std=c99 -O1 -Wall -Wextra -Werror -Wno-unused-variable -Wno-unused-function \
     -DENABLE_LOGGING=0 -Ihook tests/rgd_tlv_test.c hook/routeguidance/rgd_tlv.c \
