@@ -47,7 +47,7 @@ CarPlay patch set for Audi MHI2Q infotainment.
 - [Deployment](#-deployment)
 - [Logging](#-logging)
 - [Documentation](#-documentation)
-- [Known issues & TODO](#-known-issues--todo)
+- [Help wanted](#-help-wanted)
 - [References](#-references)
 
 ## ✨ Features
@@ -217,20 +217,9 @@ and bus, route guidance (TLV → BAP → cluster, lanes, route text), cluster co
 renderer, input, deploy/connect, build & host tests, the reverse-engineering references, and a
 per-note verification status.
 
-## 🐛 Known issues & TODO
+## 🤝 Help wanted
 
-Help wanted - open items on the current branch:
-
-- **Punch-through during the RGI on/off animation.** While route guidance animates in or out, a hole to
-  the stock map layer was briefly visible - the map backing (KDK 101/102) drawn out of sync with the
-  animation. This branch now drives the backing's opacity and stage from the VC's own FctID 44/54 and
-  keeps the maneuver context until the VC has hidden the KDK; not yet confirmed on the car.
-- **Parking popup: black block at the bottom.** Beside the side OPS popup the status line and the
-  "Check surroundings!" drawer are hidden (confirmed on the car); hiding the entertainment drawer's
-  glass plate that remained is host-tested only, not yet confirmed on the car.
-- **Wrong icon for the ramp exit on the projection.** Leaving a ramp used to draw a three-section
-  arrow. Ramps are now a single slight bend, and off-ramps also draw the continuing road; not yet
-  confirmed on the car.
+PRs are welcome - bug fixes, new maneuver cases, docs, on-car test reports.
 
 **Reporting a bad maneuver icon.** The iAP2→BAP mapping covers all 54 CarPlay maneuver types but has
 only been exercised on a limited set of real routes. A snippet of `/tmp/carplay_hook.log` from the
