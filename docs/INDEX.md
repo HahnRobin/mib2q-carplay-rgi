@@ -17,7 +17,7 @@ final verified fact. `reconciles:` frontmatter records which legacy docs were fo
 ## 🪝 Hook - `libcarplay_hook.so`  [x]
 - [iap2-interception](hook/iap2-interception.md) - recv/read hooks, FF-5A framing, Identify patch
 - [bus-protocol](hook/bus-protocol.md) - localhost TCP :19810, sticky event/command frames, fd/generation lifecycle, signal policy
-- [cover-art](hook/cover-art.md) - chunked JPEG reassembly, async decode -> VC picture
+- [cover-art](hook/cover-art.md) - iAP2 artwork file-transfer reassembly, bounded decode on a worker -> VC picture
 - [integration-seam](hook/integration-seam.md) - what LD_PRELOAD interposes vs stays stock (5-symbol export allowlist); NME injection ABI; hardening
 
 ## 🧭 Route guidance - RGD -> BAP  [x]
@@ -45,7 +45,7 @@ final verified fact. `reconciles:` frontmatter records which legacy docs were fo
 
 ## 🚀 Deploy  [x]
 - [install](deploy/install.md) - release contents, M.I.B. installer, manual install (SSH or Telnet), verify, uninstall
-- [supervisor-lifecycle](deploy/supervisor-lifecycle.md) - smartphone_integrator, renderer ownership, USB pre-SETUP recovery
+- [supervisor-lifecycle](deploy/supervisor-lifecycle.md) - smartphone_integrator, startup wrapper + renderer monitor, generation ownership
 - [connect](deploy/connect.md) - USB / NCM / Bonjour connect flow + failure root cause
 - [session-lifecycle](deploy/session-lifecycle.md) - session audit: watchdog-hang, USB pre-RTSP class, resilience risks R1-R4
 

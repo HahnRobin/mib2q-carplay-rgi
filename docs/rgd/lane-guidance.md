@@ -16,7 +16,7 @@ sources:
   - test: tests/LaneGuidanceLifecycleTest.java
   - test: tests/LaneGuidanceTransportTest.java
 reconciles:
-  - mhi2-carplay docs/cluster-and-rgi/LANE_GUIDANCE.md
+  - mib2q-carplay-rgi-next docs/cluster-and-rgi/LANE_GUIDANCE.md
 ---
 
 # Lane guidance - HUD FctID 24 & renderer lane panel

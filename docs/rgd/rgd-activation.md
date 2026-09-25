@@ -134,7 +134,7 @@ reroute never reaches Java as a deactivation - any deactivation Java sees is gen
 The app does not build the iAP2 `RouteGuidanceUpdate`: iOS `CarPlay.framework` serializes it from the
 app's `CPNavigationSession`, and the on/off gate is `SourceSupportsRouteGuidance` (TLV `0x14`), set
 only when the app's map delegate implements `mapTemplateShouldProvideNavigationMetadata:`. From the
-decrypted IPAs (analysis carried over from mhi2-carplay `THIRD_PARTY_NAV_APPS.md`, not tested on the
+decrypted IPAs (analysis carried over from mib2q-carplay-rgi-next `THIRD_PARTY_NAV_APPS.md`, not tested on the
 car):
 
 | App | Metadata gate | maneuverType | What reaches the cluster |

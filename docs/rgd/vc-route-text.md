@@ -12,7 +12,7 @@ sources:
   - test: tests/VCTextScrollTest.java
   - test: tests/RouteInfoPresentationTest.java
 reconciles:
-  - mhi2-carplay docs/cluster-and-rgi/RGI_AND_BAP_BRIDGE.md (route text section)
+  - mib2q-carplay-rgi-next docs/cluster-and-rgi/RGI_AND_BAP_BRIDGE.md (route text section)
 ---
 
 # VC route text - FctID 19 content, ETA toggle & scrolling

@@ -9,6 +9,8 @@ sources:
   - code: logging_MoreIncredibleBash/mod/custom.sh
   - code: scripts/test_logging_mib.sh
   - code: scripts/test_install_dio.sh
+  - code: scripts/test_install_listing.sh
+  - code: scripts/test_install_payload.sh
   - code: deploy/smartphone_integrator/carplay_child.json
   - code: maneuver_render/main.c
 reconciles:
@@ -18,7 +20,7 @@ reconciles:
 # Install, verify and uninstall
 
 *The build scripts only produce loose binaries. A release is staged by hand and installed either with
-the M.I.B. custom script (recommended) or by hand in a root shell on the unit. Both do exactly the same thing: copy seven
+the M.I.B. custom script (recommended) or by hand in a root shell on the unit. Both do exactly the same thing: copy eight
 files, replace one SI child and register five iAP2 message IDs. Nothing is started, stopped or
 rebooted for you.*
 
@@ -32,14 +34,14 @@ rebooted for you.*
 
 This branch replaces **no stock binary** and edits **no firewall profile**: the cluster keeps the
 head unit's own map, so there is no CarPlay video stream and no extra RTSP port to open. A release is
-seven files plus two in-place config edits.
+eight files plus two in-place config edits.
 
 | File | Source in the repo | On-unit path | Mode |
 |---|---|---|---|
 | `libcarplay_hook.so` | `build/` (`build_hook.sh`) | `/mnt/app/root/hooks/` | 755 |
 | `maneuver_render` | `build/` (`build_renderers.sh`) | `/mnt/app/root/hooks/` | 755 |
 | `flag_atlas.rgba` | `maneuver_render/resources/` | `/mnt/app/root/hooks/` (read from there, `maneuver_render/main.c:45`) | 644 |
-| `carplay_startup.sh`, `carplay_processes.sh`, `carplay_cleanup.sh` | `deploy/smartphone_integrator/` | `/mnt/app/root/hooks/` | 755 |
+| `carplay_startup.sh`, `carplay_monitor.sh`, `carplay_processes.sh`, `carplay_cleanup.sh` | `deploy/smartphone_integrator/` | `/mnt/app/root/hooks/` | 755 |
 | `carplay_hook.jar` | `build/` (`build_java.sh`) | `/mnt/app/eso/hmi/lsd/jars/` | 644 |
 | `carplay_child.json` | `deploy/smartphone_integrator/` | not a file on the unit: spliced into `smartphone_integrator.json` as `children.carplay` | - |
 | `dio_manager.json` | not staged | `/mnt/system/etc/eso/production/`, five route-guidance IDs added in place | - |
@@ -108,6 +110,7 @@ SD1/
   mod/carplay/maneuver_render
   mod/carplay/flag_atlas.rgba
   mod/carplay/carplay_startup.sh
+  mod/carplay/carplay_monitor.sh
   mod/carplay/carplay_processes.sh
   mod/carplay/carplay_cleanup.sh
   mod/carplay/carplay_hook.jar
@@ -116,7 +119,7 @@ SD1/
 `custom.sh` knows where each of these names goes (`/mnt/app/root/hooks/`, the jar to
 `/mnt/app/eso/hmi/lsd/jars/`) and ignores any other file in the folder. A self-built release from
 the repo can use the same flat layout (`build/` outputs, `maneuver_render/resources/flag_atlas.rgba`,
-the four files from `deploy/smartphone_integrator/`), or a tree with each file at its on-unit path
+the five files from `deploy/smartphone_integrator/`), or a tree with each file at its on-unit path
 under `root/`:
 
 ```text
@@ -128,6 +131,7 @@ SD1/
   mod/carplay/root/mnt/app/root/hooks/maneuver_render
   mod/carplay/root/mnt/app/root/hooks/flag_atlas.rgba
   mod/carplay/root/mnt/app/root/hooks/carplay_startup.sh
+  mod/carplay/root/mnt/app/root/hooks/carplay_monitor.sh
   mod/carplay/root/mnt/app/root/hooks/carplay_processes.sh
   mod/carplay/root/mnt/app/root/hooks/carplay_cleanup.sh
   mod/carplay/root/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar
@@ -135,6 +139,14 @@ SD1/
 
 `.gitignore` keeps the staged payload out of git, so the card can be staged in place inside the repo.
 Both layouts can be mixed; the flat files are installed first.
+
+**Checks before anything is copied** (`list_payload` in `custom.sh`). The flat release is all or
+nothing: `custom.sh` knows the eight names and checks each one on the card by name, so a partly
+copied release stops with `FAILED release incomplete, missing in …: <names>` (a new
+`carplay_startup.sh` must never run without `carplay_monitor.sh`). The card is never walked for the
+flat files. The `root/` tree does need `find`, and QNX fs-dos makes it fail with
+`./dir/..: Filename too long` on some FAT cards although its list is complete, so exactly that error
+is tolerated and any other `find` error fails the install.
 
 **2. Run it.** Disconnect CarPlay, then **GEM -> M.I.B. -> Advanced Settings** and pick the script
 entry your M.I.B. shows:
@@ -153,11 +165,12 @@ M.I.B. prints "Nothing to do!". If the script is started on the RCC it hands its
 2. copies each flat release file to its fixed path and every file under `root/` to the same path
    under `/`, each through `<file>.carplay-new.<pid>`
    and an atomic `mv`, and sets its mode (755 for `.so`, `maneuver_render`, `*.sh`; 644 otherwise);
-3. replaces the `"carplay"` child of `smartphone_integrator.json` with `carplay_child.json`, keeping
+3. deletes M.I.B.'s `NavActiveIgnore.jar` / `navignore_*.jar` if present (see [Traps](#-traps));
+4. replaces the `"carplay"` child of `smartphone_integrator.json` with `carplay_child.json`, keeping
    the trailing comma, and refuses to write if the child count would change;
-4. registers the route-guidance IDs in `dio_manager.json` (see
+5. registers the route-guidance IDs in `dio_manager.json` (see
    [Route-guidance message IDs](#-route-guidance-message-ids));
-5. runs `sync` and prints `DONE (install). Reboot the HU to load.`
+6. runs `sync` and prints `DONE (install). Reboot the HU to load.`
 
 It stops no processes and does not reboot. Re-running it is safe: the stock backups are taken once
 and never overwritten by a patched file.
@@ -168,6 +181,8 @@ and never overwritten by a patched file.
 | Output | Meaning | What to do |
 |---|---|---|
 | `no payload in …/carplay (release files or root/ tree)` | neither release files nor `root/` found | stage the card again |
+| `FAILED release incomplete, missing in …: <names>` | only part of the release reached `mod/carplay/` | copy all release assets again |
+| `FAILED listing payload` | `find` over `root/` failed with an unexpected error | check the card, or use the flat release layout |
 | `WARN no carplay_child.json resource` | JSON patch skipped, the hook will never load | put `carplay_child.json` in `mod/carplay/` and re-run |
 | `WARN unsupported carplay layout` / `expected one carplay child` | SI json not in the stock shape | edit it by hand ([manual step 3](#3-edit-two-config-files)) |
 | `WARN dio_manager.json: …; left as-is` | the ID lists were not found exactly once | add the IDs by hand before rebooting |
@@ -184,7 +199,7 @@ or USB stick works) and `cd` there.
 ```mermaid
 sequenceDiagram
   accTitle: Manual install steps in a root shell
-  accDescr: Remount both partitions writable, copy the seven files and set their modes, edit the SI child and dio_manager.json as text, then sync, wait and reboot manually.
+  accDescr: Remount both partitions writable, copy the eight files and set their modes, edit the SI child and dio_manager.json as text, then sync, wait and reboot manually.
 
   participant you as 🧑 You
   participant app as /mnt/app
@@ -210,7 +225,7 @@ mkdir -p /mnt/app/root/hooks
 
 ```bash
 cp libcarplay_hook.so maneuver_render flag_atlas.rgba /mnt/app/root/hooks/
-cp carplay_startup.sh carplay_processes.sh carplay_cleanup.sh /mnt/app/root/hooks/
+cp carplay_startup.sh carplay_monitor.sh carplay_processes.sh carplay_cleanup.sh /mnt/app/root/hooks/
 chmod 755 /mnt/app/root/hooks/libcarplay_hook.so /mnt/app/root/hooks/maneuver_render /mnt/app/root/hooks/carplay_*.sh
 chmod 644 /mnt/app/root/hooks/flag_atlas.rgba
 cp carplay_hook.jar /mnt/app/eso/hmi/lsd/jars/
@@ -381,7 +396,7 @@ hook logs nothing about them.
 
 **With M.I.B.:** copy `uninstall_MoreIncredibleBash/` over the card and run the custom script. It
 needs no payload tree: it renames every `*.carplay-stock` under `/mnt/app` and `/mnt/system` back to
-the original (the SI json and `dio_manager.json`), then deletes the seven owned files and the
+the original (the SI json and `dio_manager.json`), then deletes the eight owned files and the
 renderer's shader cache `/mnt/persist/var/app/luka_carplay_maneuver`. `custom.sh
 uninstall` from the install card is a second path while the payload tree is still on it.
 
@@ -392,7 +407,7 @@ mount -uw /mnt/app; mount -uw /mnt/system
 F=/mnt/system/etc/eso/production
 mv $F/smartphone_integrator.json.carplay-stock $F/smartphone_integrator.json
 mv $F/dio_manager.json.carplay-stock $F/dio_manager.json
-cd /mnt/app/root/hooks && rm -f libcarplay_hook.so maneuver_render flag_atlas.rgba carplay_startup.sh carplay_processes.sh carplay_cleanup.sh
+cd /mnt/app/root/hooks && rm -f libcarplay_hook.so maneuver_render flag_atlas.rgba carplay_startup.sh carplay_monitor.sh carplay_processes.sh carplay_cleanup.sh
 rm -f /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar
 rm -rf /mnt/persist/var/app/luka_carplay_maneuver
 sync
@@ -421,6 +436,12 @@ the next `dio_manager` generation; the jar only by a reboot.
 
 **A card written from a Mac carries `._name` and `.DS_Store` files.** `custom.sh` skips them, so an
 AppleDouble `._carplay_hook.jar` never lands on j9's boot classpath.
+
+**M.I.B.'s NavActiveIgnore jar must not sit next to ours.** "NavActiveIgnore on" copies
+`navignore_audi.jar` / `navignore_vw.jar` to `lsd/jars/NavActiveIgnore.jar`. It replaces
+`org.dsi.ifc.carplay.AppState` so `getAppStateID()` and `getOwner()` always return 0, and the CarPlay
+lifecycle loses which resources CarPlay owns. `custom.sh` deletes it (and hand-copied `navignore_*.jar`)
+without a backup; after a manual install, delete it yourself.
 
 **The unit's shell is bare QNX 6.5.** Pushing files over SSH (the host-side snippets above) fails in
 predictable ways:

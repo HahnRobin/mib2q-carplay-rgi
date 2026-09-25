@@ -17,7 +17,7 @@ sources:
   - test: tests/RendererViewportTest.java
   - test: tests/RendererServerTransportTest.java
 reconciles:
-  - mhi2-carplay docs/cluster-and-rgi/HUD_RENDERER.md
+  - mib2q-carplay-rgi-next docs/cluster-and-rgi/HUD_RENDERER.md
 ---
 
 # maneuver_render - protocol, scene engine & visible area

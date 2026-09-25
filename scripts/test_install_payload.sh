@@ -27,7 +27,7 @@ stock_dio='        ## 0x5000
         ## 0x5001
         "MessagesReceivedFromDevice":["0x5001", "0x4C04"],'
 
-ASSETS="libcarplay_hook.so maneuver_render flag_atlas.rgba carplay_startup.sh carplay_processes.sh carplay_cleanup.sh carplay_hook.jar"
+ASSETS="libcarplay_hook.so maneuver_render flag_atlas.rgba carplay_startup.sh carplay_monitor.sh carplay_processes.sh carplay_cleanup.sh carplay_hook.jar"
 
 run() {   # $1 shell, $2 layout (flat|tree), $3 action
     S=$T/$2; mkdir -p "$S/mod/carplay" "$S/mnt/system/etc/eso/production"
@@ -51,16 +51,18 @@ for sh in /bin/ksh /bin/mksh /bin/dash /bin/sh; do
             else mkdir -p "$S/mod/carplay/root/$d"; echo "$a" > "$S/mod/carplay/root/$d/$a"; fi
         done
         echo junk > "$S/mod/carplay/README.txt"   # unknown flat files are ignored
+        J=$S/mnt/app/eso/hmi/lsd/jars; mkdir -p "$J"; echo nav > "$J/NavActiveIgnore.jar"   # M.I.B. conflict jar
 
         run "$sh" "$layout" install
         H=$S/mnt/app/root/hooks
-        for a in libcarplay_hook.so maneuver_render carplay_startup.sh carplay_processes.sh carplay_cleanup.sh; do
+        for a in libcarplay_hook.so maneuver_render carplay_startup.sh carplay_monitor.sh carplay_processes.sh carplay_cleanup.sh; do
             [ "$(cat "$H/$a")" = "$a" ] || fail "$sh $layout" "$a not installed"
             [ "$(mode "$H/$a")" = 755 ] || fail "$sh $layout" "$a mode $(mode "$H/$a")"
         done
         [ "$(mode "$H/flag_atlas.rgba")" = 644 ] || fail "$sh $layout" "atlas mode"
         [ "$(mode "$S/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar")" = 644 ] || fail "$sh $layout" "jar not installed/mode"
         [ ! -e "$H/README.txt" ] || fail "$sh $layout" "unknown flat file installed"
+        [ ! -e "$J/NavActiveIgnore.jar" ] || fail "$sh $layout" "NavActiveIgnore.jar not removed"
         P=$S/mnt/system/etc/eso/production
         grep -q carplay_startup.sh "$P/smartphone_integrator.json" || fail "$sh $layout" "SI child not replaced"
         grep -q '"exec": "o"' "$P/smartphone_integrator.json" || fail "$sh $layout" "other SI child lost"
@@ -81,4 +83,4 @@ for sh in /bin/ksh /bin/mksh /bin/dash /bin/sh; do
     done
     shells="${shells:-} $sh"
 done
-echo "M.I.B. installer flat + tree install/uninstall:$shells PASS"
+echo "M.I.B. installer flat + tree install/uninstall, NavActiveIgnore removal:$shells PASS"

@@ -39,7 +39,7 @@ JARS=/mnt/app/eso/hmi/lsd/jars
 flat_dest() {
     case $1 in
         libcarplay_hook.so|maneuver_render|flag_atlas.rgba) echo "$HOOKS/$1" ;;
-        carplay_startup.sh|carplay_processes.sh|carplay_cleanup.sh) echo "$HOOKS/$1" ;;
+        carplay_startup.sh|carplay_monitor.sh|carplay_processes.sh|carplay_cleanup.sh) echo "$HOOKS/$1" ;;
         carplay_hook.jar) echo "$JARS/$1" ;;
         *) return 1 ;;
     esac
@@ -60,6 +60,40 @@ mode_for() {
 count_char() { n=0; rest=$1; while :; do case $rest in *"$2"*) rest=${rest#*"$2"}; n=$((n+1)) ;; *) break ;; esac; done; echo "$n"; }
 
 backup_once() { [ -e "$2" ] || cp -p "$1" "$2" || { echo "FAILED backup $2"; return 1; }; }
+
+# The release assets, dropped flat into carplay/.  All or nothing: a partly copied
+# release would pair a new carplay_startup.sh with an old monitor, so it stops here.
+FLAT_ASSETS="libcarplay_hook.so maneuver_render flag_atlas.rgba carplay_startup.sh
+carplay_monitor.sh carplay_processes.sh carplay_cleanup.sh carplay_hook.jar"
+
+# Payload as "source|destination" lines into $1.  Flat assets are checked by name,
+# never by walking the card.  The optional root/ tree needs find: QNX fs-dos cannot
+# stat ".." inside the folders of some FAT cards, so find reports
+# "./dir/..: Filename too long" and exits 1 although the list is complete.  Tolerate
+# exactly that error; anything else (or an empty list) still fails.
+list_payload() {
+    : > "$1" || { echo "FAILED create $1"; return 1; }
+    missing=
+    for a in $FLAT_ASSETS; do
+        if [ -f "$RES/$a" ]; then printf '%s|%s\n' "$RES/$a" "$(flat_dest "$a")" >> "$1"
+        else missing="$missing $a"; fi
+    done
+    if [ -s "$1" ] && [ -n "$missing" ]; then
+        echo "FAILED release incomplete, missing in $RES:$missing"; rm -f "$1"; return 1
+    fi
+    if [ -d "$ROOT" ]; then
+        ( cd "$ROOT" && find . -type f > "$1.tree" ) 2> "$1.err"
+        if grep -v '/\.\.: Filename too long' "$1.err" | grep -q .; then
+            echo "FAILED listing payload"; cat "$1.err"; rm -f "$1" "$1.tree" "$1.err"; return 1
+        fi
+        while IFS= read -r f; do
+            case $f in */._*|*/.DS_Store) continue ;; esac   # macOS junk from a Mac-written card
+            printf '%s|%s\n' "$ROOT/${f#./}" "/${f#./}"
+        done < "$1.tree" >> "$1"
+        rm -f "$1.tree" "$1.err"
+    fi
+    [ -s "$1" ] || { echo "no payload in $RES (release files or root/ tree)"; rm -f "$1"; return 1; }
+}
 
 # ---- smartphone_integrator.json: replace the "carplay" child by path ----------
 patch_json() {
@@ -142,18 +176,7 @@ mount -uw /mnt/system 2>/dev/null || true
 
 # Payload as "source|destination" lines (/tmp is /dev/shmem: no directories there).
 LIST=/tmp/carplay_files.$$
-: > "$LIST" || { echo "FAILED create $LIST"; exit 1; }
-for f in "$RES"/*; do
-    [ -f "$f" ] || continue
-    dest=$(flat_dest "${f##*/}") && printf '%s|%s\n' "$f" "$dest" >> "$LIST"
-done
-if [ -d "$ROOT" ]; then
-    ( cd "$ROOT" && find . -type f ) 2>/dev/null | while IFS= read -r f; do
-        case $f in */._*|*/.DS_Store) continue ;; esac   # macOS junk from a Mac-written card
-        printf '%s|%s\n' "$ROOT/${f#./}" "/${f#./}"
-    done >> "$LIST"
-fi
-[ -s "$LIST" ] || { echo "no payload in $RES (release files or root/ tree)"; rm -f "$LIST"; exit 1; }
+list_payload "$LIST" || exit 1
 
 case $ACTION in
 install)
@@ -167,6 +190,16 @@ install)
         echo "  $dest"
     done < "$LIST"
     rm -f "$LIST"
+    # M.I.B.'s "NavActiveIgnore" (navignore_audi/_vw.jar, installed as NavActiveIgnore.jar)
+    # replaces org.dsi.ifc.carplay.AppState so getAppStateID()/getOwner() always return 0:
+    # the HMI no longer sees which resources CarPlay owns, which our lifecycle relies on.
+    # Not ours and not stock: removed, no backup.
+    for j in NavActiveIgnore.jar navignore_audi.jar navignore_vw.jar; do
+        j=$JARS/$j
+        [ -e "$j" ] || continue
+        if rm -f "$j"; then echo "  removed $j (M.I.B. NavActiveIgnore conflicts with CarPlay app state)"
+        else echo "  WARN could not remove $j"; fi
+    done
     patch_json
     patch_dio
     sync

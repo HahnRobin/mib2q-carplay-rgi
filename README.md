@@ -155,12 +155,12 @@ meant for any MHI2Q MU firmware (developed on MU1316). What matters is:
 With both in place it should almost certainly work, as long as nothing went wrong during the
 install itself.
 
-A release is seven files plus two config edits; nothing stock is replaced and no firewall profile is
+A release is eight files plus two config edits; nothing stock is replaced and no firewall profile is
 touched:
 
 | On-unit path | Files |
 | --- | --- |
-| `/mnt/app/root/hooks/` | `libcarplay_hook.so`, `maneuver_render` (from `build/`), `flag_atlas.rgba` (from `maneuver_render/resources/`), `carplay_startup.sh`, `carplay_processes.sh`, `carplay_cleanup.sh` (from `deploy/smartphone_integrator/`) |
+| `/mnt/app/root/hooks/` | `libcarplay_hook.so`, `maneuver_render` (from `build/`), `flag_atlas.rgba` (from `maneuver_render/resources/`), `carplay_startup.sh`, `carplay_monitor.sh`, `carplay_processes.sh`, `carplay_cleanup.sh` (from `deploy/smartphone_integrator/`) |
 | `/mnt/app/eso/hmi/lsd/jars/` | `carplay_hook.jar` (from `build/`) |
 | `/mnt/system/etc/eso/production/smartphone_integrator.json` | `children.carplay` replaced by [`carplay_child.json`](deploy/smartphone_integrator/carplay_child.json) |
 | `/mnt/system/etc/eso/production/dio_manager.json` | `MessagesSentByAccessory` += `0x5200`, `0x5203`; `MessagesReceivedFromDevice` += `0x5201`, `0x5202`, `0x5204` |
@@ -169,7 +169,7 @@ Both the `dio_manager.json` IDs and the hook's runtime Identify patch are requir
 iOS sends route guidance and the SDK silently drops it.
 
 **With M.I.B. (recommended).** Copy `install_MoreIncredibleBash/` to the M.I.B. SD card and drop
-**all assets of a release** straight into `mod/carplay/` (the seven files above plus
+**all assets of a release** straight into `mod/carplay/` (the eight files above plus
 `carplay_child.json`; no folders needed), then run **GEM -> M.I.B. -> Advanced Settings -> Run Custom Script** (**Run individual script** on
 M.I.B. release zips up to V3.7.1) with CarPlay disconnected. `custom.sh`
 copies the tree with atomic renames, patches both configs in place and keeps a `.carplay-stock`

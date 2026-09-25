@@ -10,7 +10,7 @@ sources:
   - test: tests/DistanceBargraphChainTest.java
 reconciles:
   - docs/reference/NAVSD_FCTID_MATRIX.md
-  - mhi2-carplay docs/cluster-and-rgi/DISTANCE_BARGRAPH.md
+  - mib2q-carplay-rgi-next docs/cluster-and-rgi/DISTANCE_BARGRAPH.md
 ---
 
 # Distance progress - BAP bargraph & arrow fill

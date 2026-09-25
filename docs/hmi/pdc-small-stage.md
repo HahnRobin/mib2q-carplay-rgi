@@ -14,7 +14,7 @@ sources:
   - code: java_patch/de/esolutions/hmi/widgets/audi/evo/widgets/StatusBarStubController.java
   - code: scripts/test_pdc.sh
 reconciles:
-  - mhi2-carplay docs/cluster-and-rgi/PDC_SMALL_STAGE.md
+  - mib2q-carplay-rgi-next docs/cluster-and-rgi/PDC_SMALL_STAGE.md
 ---
 
 # PDC small stage - CarPlay beside the parking popup
@@ -27,7 +27,7 @@ head-unit screen, not the cluster; it is independent of route guidance.*
 
 ## 📋 Status
 
-The guard is the same code as in mhi2-carplay (ported unchanged). The car results below were
+The guard is the same code as in mib2q-carplay-rgi-next (ported unchanged). The car results below were
 recorded there.
 
 | Stage | Result |

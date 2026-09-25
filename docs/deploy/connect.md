@@ -89,4 +89,4 @@ sequenceDiagram
 ## ⚠️ (!) Open
 
 - root cause of the missing re-registration not fully proven; iOS 26-vs-27 behaviour differs - see
-  [carkitd-bonjour](../re/ios/carkitd-bonjour.md). The guarded USB pre-SETUP reset is handled by [supervisor-lifecycle](supervisor-lifecycle.md).
+  [carkitd-bonjour](../re/ios/carkitd-bonjour.md). The supervisor does not reset USB; see [supervisor-lifecycle](supervisor-lifecycle.md#-no-usb-recovery-in-the-supervisor).

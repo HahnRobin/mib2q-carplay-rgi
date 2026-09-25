@@ -14,6 +14,7 @@ sources:
   - code: java_patch/de/audi/tghu/fwhmi/DisplayManagerMIB2High.java
   - code: java_patch/com/luka/carplay/rgd/GatedCombiService.java
   - code: deploy/smartphone_integrator/carplay_startup.sh
+  - code: deploy/smartphone_integrator/carplay_monitor.sh
   - re: MU1316 libairplay.so 210.81 / libNmeSDK / libNmeBase (IDA offsets)
 reconciles: [docs/reference/STOCK_INTEGRATION_SEAM_AUDIT.md]
 ---
@@ -113,14 +114,15 @@ support - it supplies a genuinely absent case. *(RE-derived; not re-checkable fr
 ## ⚙️ Startup, cleanup & process ownership
 
 - [x] **LD_PRELOAD is scoped to `dio_manager` only** - `carplay_startup.sh` exports the private
-  `LD_PRELOAD=$H/libcarplay_hook.so` **only immediately before `exec dio_manager`**; renderers are
-  launched with `LD_PRELOAD=` cleared and `GRAPHICS_ROOT=/proc/boot`. This is the operational mitigation
-  for the fail-open process gate below.
-- (!) **Supervisor grace race** (from-re-notes) - the old monitor waits exactly **2 s** for a replacement
-  owner while the child restart delay is also 2 s; scheduling slop can let the old monitor stop
-  renderers the replacement meant to adopt. Use a grace > restartDelay or an atomic owner token.
-- (!) PID-reuse (recorded-PID check validates `/proc/<pid>` existence, not exe identity) and a fail-open
-  `netstat` health check remain bounded risks. *(from-re-notes.)*
+  `LD_PRELOAD=$H/libcarplay_hook.so` **only immediately before `exec dio_manager`**; `carplay_monitor.sh`
+  and the renderer it launches run with `LD_PRELOAD=` cleared (the renderer also with
+  `GRAPHICS_ROOT=/proc/boot`). This is the operational mitigation for the fail-open process gate below.
+- [x] **Supervisor grace race closed** - generation ownership is an atomic owner token
+  (`/tmp/carplay_supervisor.owner`, stage + `mv`); an old monitor goes quiet as soon as the file names
+  another PID, and no monitor stops renderers on dio exit. See [supervisor-lifecycle](../deploy/supervisor-lifecycle.md).
+- [x] **PID reuse** - the steady check is `/proc/<pid>` existence, but any signal is preceded by an exe
+  identity check (`pidin -p <pid> ar`, `cp_renderer_identity`), and an unknown answer keeps the process.
+  No socket/`netstat` health check remains.
 
 ## 🔐 Hardening findings
 

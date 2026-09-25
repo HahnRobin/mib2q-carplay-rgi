@@ -45,9 +45,10 @@ byte-identical to stock.
 
 ```text
 smartphone_integrator            (boot-resident; spawns on phone connect)
-  +- carplay_startup.sh
-      +- maneuver_render          TCP 127.0.0.1:19800  (Java -> renderer)
-      +- dio_manager              stock libairplay 210.81 + LD_PRELOAD hook
+  +- carplay_startup.sh           exec's into dio_manager (same PID)
+      = dio_manager               stock libairplay 210.81 + LD_PRELOAD hook
+      +- carplay_monitor.sh       per-generation renderer monitor (no hook)
+          +- maneuver_render      TCP 127.0.0.1:19800  (Java -> renderer; outlives dio)
 
 Java patch (lsd.jxe, alive from boot)
   +- CarplayBus server            TCP 127.0.0.1:19810  (hook <-> Java)

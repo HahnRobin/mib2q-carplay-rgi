@@ -4,6 +4,7 @@ tags: [deploy, lifecycle, verified]
 status: verified-source
 sources:
   - code: deploy/smartphone_integrator/carplay_startup.sh
+  - code: deploy/smartphone_integrator/carplay_monitor.sh
   - code: deploy/smartphone_integrator/carplay_processes.sh
   - code: deploy/smartphone_integrator/carplay_child.json
   - code: java_patch/com/luka/carplay/rgd/RendererServer.java
@@ -20,8 +21,8 @@ reconciles:
 
 ## 📋 Context
 
-> `smartphone_integrator` (phone connect) -> **carplay_startup.sh** -> monitor + `exec dio_manager`
-> owns the lifecycle: see [supervisor-lifecycle](supervisor-lifecycle.md) for renderer ownership/USB recovery and [connect](connect.md)
+> `smartphone_integrator` (phone connect) -> **carplay_startup.sh** -> `carplay_monitor.sh` + `exec dio_manager`
+> owns the lifecycle: see [supervisor-lifecycle](supervisor-lifecycle.md) for renderer ownership and [connect](connect.md)
 > for why the NCM link churns. The cluster context switch these modules drive is [display-contexts](../cluster/display-contexts.md).
 
 This note carries the **shipping-relevant** half of the RE session-lifecycle audit. The audit's
@@ -51,24 +52,19 @@ What is verified here is the SI supervision envelope that bounds a hang (`carpla
 
 These are the non-thrash timings; the wrapper never restarts the Java stack, and every millisecond
 before `exec dio_manager` is taken from the 10 s startup budget - which is why renderer adoption runs
-**inside the monitor after `exec`**, not before it (see R4 and [supervisor-lifecycle](supervisor-lifecycle.md)).
+**in the background monitor**, never in the wrapper before `exec` (see R4 and [supervisor-lifecycle](supervisor-lifecycle.md)).
 
-## 🔍 Independent pre-RTSP failure class: USB enumeration [x]
+## 🔍 Independent pre-RTSP failure class: USB enumeration (!)
 
 Some "nothing starts until replug" runs fail **before** any RTSP/control SETUP: USB reports both iAP2
 interfaces matched but only one running (`drivers_matched::2` + `drivers_running::1` in
 `/ramdisk/pps/device/usb-1.0.1`). This is not the RTSP path - the hook, Java patch and renderer have
-not entered the failing transaction yet - so it must stay a separate recovery class; resetting USB
-after an RTSP failure would only hide the real defect and churn the physical link.
+not entered the failing transaction yet - so it stays a separate failure class.
 
-**Verified in `carplay_processes.sh`:** `cp_usb_stuck_pre_setup()` matches exactly that PPS signature.
-A generation that outlived control SETUP (`>= 2` monitor ticks) but left no
-`/tmp/carplay_control_setup.<pid>` marker and still shows the stuck signature increments a counter;
-on the **third** such generation the monitor *queues* a one-shot request (`cp_usb_reset.pending`). The
-next SI-owned wrapper consumes it (`cp_usb_consume_pending_reset`) and performs at most **one**
-`reset port 3 250 1` to `/dev/media-con-ctrl`, latched (`cp_usb_reset.latched`) until a successful
-control SETUP or a detached/non-stuck PPS state rearms it. The monitor only ever *queues*; it never
-resets the connector under a starting/dying CarPlay process.
+**No automatic recovery ships.** A guarded one-shot `reset port 3 250 1` to `/dev/media-con-ctrl` was
+tried and measured on the car to make the state worse (`drivers_running` 1 -> 0), so it was removed.
+`smartphone_integrator` stays the sole owner of OTG/USB; the supervisor never touches it
+([supervisor-lifecycle](supervisor-lifecycle.md#-no-usb-recovery-in-the-supervisor)).
 
 ## 🧭 Captured healthy activation timeline (!)
 
@@ -134,11 +130,11 @@ ships:
 
 ### R4 - stale-renderer replacement eating the SI startup budget [x]
 
-Renderer adoption was moved **into the monitor, after `exec dio_manager`**, so it costs **nothing**
-from dio's 10 s `startupTimeout` (`carplay_startup.sh` `monitor_renderers`). Only `maneuver_render`
-exists (no altScreen renderer). Initial adoption of a wedged renderer uses a **1 s** grace
-(`cp_kill_renderer "$SR_NAME" 1`); the **4 s** Qualcomm WFD/EGL grace is reserved for explicit system
-stop (`cp_stop_renderer_snapshot`). Ordinary `dio` churn never kills the persistent renderer at all.
+Renderer adoption runs in **`carplay_monitor.sh`, in the background, while the wrapper `exec`s
+`dio_manager`**, so it costs **nothing** from dio's 10 s `startupTimeout` (`start_renderer`). Only
+`maneuver_render` exists (no altScreen renderer). An adopted renderer that fails the identity check is
+re-checked after 2 s, then replaced with a **1 s** TERM grace (`cp_kill_renderer "$MON_NAME" 1`).
+`dio` churn never kills the persistent renderer at all.
 
 ## ✅ Cleared as primary session killers [x]
 
@@ -168,9 +164,8 @@ altScreen-only items from the source plan are dropped.
    to stock ctx 74.
 4. **Stall/disconnect the Java transport while spinning the steering-wheel controls.** HMI callbacks
    and the SI watchdog must stay responsive; stale generation commands must be discarded on reconnect.
-5. **Reproduce the exact USB PPS mismatch three times before any control SETUP.** Require exactly one
-   `reset port 3 250 1` on the next generation, and prove any successful SETUP or a detached/non-stuck
-   PPS state rearms the latch.
+5. **Reproduce the USB PPS mismatch before any control SETUP.** Require the supervisor to leave USB
+   alone (no `reset port`) and record whether SI's own retry recovers it.
 
 ## 📋 Lifecycle matrix
 
@@ -178,7 +173,7 @@ altScreen phases (RTSP control negotiation, 111/110 listener setup, active 111 v
 
 | Phase | Verdict | Evidence / remaining validation |
 |---|---|---|
-| USB attach & SI classification | [x] guarded recovery | Exact pre-RTSP PPS signature, three-generation threshold, one-shot latch; HU replay required |
+| USB attach & SI classification | (!) SI-owned | No supervisor USB reset (measured to worsen it); SI's retry is the only recovery |
 | Wrapper before `exec dio_manager` | [x] startup budget hardened | Adoption inside the monitor; initial stale-renderer grace 1 s; persistent renderer never kill/recreated |
 | iAP2 Identify / Auth / RGI | [x] no session blocker | Sub-second in the captured healthy timeline; injection worker is generation-aware/bounded |
 | Renderer transport (`:19800`) | [x] blocking paths isolated | Enqueue-only callers, one writer thread, generation-scoped drop-oldest |
