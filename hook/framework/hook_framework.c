@@ -197,7 +197,9 @@ static void* inject_worker_main(void* arg) {
         pthread_mutex_unlock(&g_fw.lock);
 
         if (!iap) {
-            LOG_INFO(LOG_MODULE,
+            /* WARN: never expected in a live session (a lost StartListUpdates
+             * or call command), so it must reach the log without carplay_verbose. */
+            LOG_WARN(LOG_MODULE,
                      "Dropped stale semantic frame gen=%u session=%u len=%u",
                      (unsigned)item.generation, (unsigned)item.link_session,
                      (unsigned)item.len);
@@ -374,9 +376,7 @@ static void store_injection_context(const uint8_t* buf, size_t len,
     ensure_fw_lock_init();
     pthread_mutex_lock(&g_fw.lock);
     if (have_link) {
-        inj->link_session = hdr.session;
-        inj->generation++;
-        if (inj->generation == 0) inj->generation = 1;
+        inject_note_link(inj, hdr.session);
         inj->valid = (g_fw.cinemo_iap != NULL &&
                       g_fw.cinemo_iap_owner_pid == (int)getpid());
     }
@@ -387,7 +387,7 @@ static void clear_injection_context(void) {
     injection_ctx_t* inj = &g_fw.ctx.inject;
     ensure_fw_lock_init();
     pthread_mutex_lock(&g_fw.lock);
-    memset(inj, 0, sizeof(*inj));
+    inject_unlink(inj);
     pthread_mutex_unlock(&g_fw.lock);
 }
 
@@ -846,7 +846,7 @@ HOOK_EXPORT int CinemoCreateIAP(void* args) {
     old_owner_pid = g_fw.cinemo_iap_owner_pid;
     g_fw.cinemo_iap = new_iap;
     g_fw.cinemo_iap_owner_pid = (int)getpid();
-    if (g_fw.ctx.inject.generation != 0)
+    if (g_fw.ctx.inject.linked)
         g_fw.ctx.inject.valid = true;
     pthread_mutex_unlock(&g_fw.lock);
 

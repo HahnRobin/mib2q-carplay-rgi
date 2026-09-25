@@ -138,9 +138,64 @@ public final class CarplayBusTransportTest {
         check(oldCalls[0] == 0, "preempted old frame dispatched");
     }
 
+    /* Cold boot: the hook's sticky state arrives before a late module listens. */
+    private static void lateListenerGetsSticky() throws Exception {
+        final CarplayBus bus = new CarplayBus(0);
+        Socket s = new Socket();
+        set(bus, "running", Boolean.TRUE); set(bus, "lifecycleGeneration", Integer.valueOf(1)); set(bus, "sock", s);
+        Class[] t = {Integer.TYPE, Socket.class, Integer.TYPE, Integer.TYPE, byte[].class, Integer.TYPE};
+        call(bus, "dispatch", t, new Object[] {Integer.valueOf(1), s, Integer.valueOf(CarplayBus.EVT_RGD_UPDATE),
+            Integer.valueOf(CarplayBus.FLAG_STICKY), new byte[] {5}, Integer.valueOf(1)});
+        call(bus, "dispatch", t, new Object[] {Integer.valueOf(1), s, Integer.valueOf(CarplayBus.EVT_SYNC_BEGIN),
+            Integer.valueOf(0), new byte[] {6}, Integer.valueOf(1)});
+        final int[] got = {-1, -1};
+        bus.on(CarplayBus.EVT_RGD_UPDATE, new CarplayBus.Listener() {
+            public void onFrame(int type, int flags, byte[] bytes, int len) { got[0] = bytes[0]; }
+        });
+        bus.on(CarplayBus.EVT_SYNC_BEGIN, new CarplayBus.Listener() {
+            public void onFrame(int type, int flags, byte[] bytes, int len) { got[1] = bytes[0]; }
+        });
+        long end = System.currentTimeMillis() + 3000;
+        while (got[0] != 5 && System.currentTimeMillis() < end) Thread.sleep(1);
+        check(got[0] == 5, "late listener missed the held sticky frame");
+        check(got[1] == -1, "non-sticky frame must not be held");
+        /* A held frame never outlives its connection. */
+        bus.off(CarplayBus.EVT_RGD_UPDATE);
+        call(bus, "dispatch", t, new Object[] {Integer.valueOf(1), s, Integer.valueOf(CarplayBus.EVT_RGD_UPDATE),
+            Integer.valueOf(CarplayBus.FLAG_STICKY), new byte[] {7}, Integer.valueOf(1)});
+        synchronized (get(bus, "lock")) { call(bus, "closeConnectionLocked", new Class[] {String.class}, new Object[] {"test"}); }
+        got[0] = -1;
+        bus.on(CarplayBus.EVT_RGD_UPDATE, new CarplayBus.Listener() {
+            public void onFrame(int type, int flags, byte[] bytes, int len) { got[0] = bytes[0]; }
+        });
+        Thread.sleep(100);
+        check(got[0] == -1, "held frame survived its connection");
+        /* on() must not wait for a dispatch in progress (caller may hold a monitor the listener needs). */
+        set(bus, "sock", s);
+        call(bus, "dispatch", t, new Object[] {Integer.valueOf(1), s, Integer.valueOf(CarplayBus.EVT_COVERART),
+            Integer.valueOf(CarplayBus.FLAG_STICKY), new byte[] {9}, Integer.valueOf(1)});
+        Object dl = get(bus, "dispatchLock");
+        final boolean[] returned = {false};
+        final int[] art = {-1};
+        synchronized (dl) {
+            Thread r = new Thread(new Runnable() { public void run() {
+                bus.on(CarplayBus.EVT_COVERART, new CarplayBus.Listener() {
+                    public void onFrame(int type, int flags, byte[] bytes, int len) { art[0] = bytes[0]; }
+                });
+                returned[0] = true;
+            }});
+            r.start(); r.join(3000);
+            check(returned[0], "on() blocked on dispatchLock");
+            check(art[0] == -1, "held frame delivered outside dispatchLock");
+        }
+        end = System.currentTimeMillis() + 3000;
+        while (art[0] != 9 && System.currentTimeMillis() < end) Thread.sleep(1);
+        check(art[0] == 9, "held frame not delivered once dispatchLock was free");
+    }
+
     public static void main(String[] args) throws Exception {
         Log.setLevel(-1);
-        malformedLists(); realWireAndRestart(); delayedOldRead();
-        System.out.println("CarplayBusTransportTest: malformed lists, 30 restarts, fragmented wire, stale bind/read and outbound bounds PASS");
+        malformedLists(); realWireAndRestart(); delayedOldRead(); lateListenerGetsSticky();
+        System.out.println("CarplayBusTransportTest: malformed lists, 30 restarts, fragmented wire, stale bind/read, outbound bounds and late sticky listener PASS");
     }
 }

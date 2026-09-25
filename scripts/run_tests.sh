@@ -26,6 +26,11 @@ cc -std=c99 -O1 -Wall -Wextra -Werror -Wno-unused-variable -Wno-unused-function 
     -o "$OUT/rgd_tlv"
 "$OUT/rgd_tlv"
 
+printf '%-32s ' inject_generation_test
+cc -std=c99 -O1 -Wall -Wextra -Werror -Wno-unused-function \
+    -DENABLE_LOGGING=0 -Ihook -Ihook/framework tests/inject_generation_test.c -o "$OUT/inject_generation"
+"$OUT/inject_generation"
+
 printf '%-32s ' state_trace_test
 cc -std=c99 -O2 -Wall -Wextra -Werror -Ihook \
     -DENABLE_LOGGING=0 -DENABLE_STATE_TRACE=1 \
@@ -58,6 +63,9 @@ python3 scripts/check_local_protocols.py
 
 printf '%-32s ' install_dio_test
 sh scripts/test_install_dio.sh
+
+printf '%-32s ' logging_mib_test
+sh scripts/test_logging_mib.sh
 
 printf '%-32s ' install_payload_test
 sh scripts/test_install_payload.sh

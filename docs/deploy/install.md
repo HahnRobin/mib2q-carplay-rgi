@@ -6,6 +6,8 @@ sources:
   - code: install_MoreIncredibleBash/mod/custom.sh
   - code: uninstall_MoreIncredibleBash/mod/custom.sh
   - code: install_MoreIncredibleBash/mod/command.sh
+  - code: logging_MoreIncredibleBash/mod/custom.sh
+  - code: scripts/test_logging_mib.sh
   - code: scripts/test_install_dio.sh
   - code: deploy/smartphone_integrator/carplay_child.json
   - code: maneuver_render/main.c
@@ -398,12 +400,27 @@ sync
 
 Then reboot the same careful way.
 
+## 📋 Collect logs
+
+Copy `logging_MoreIncredibleBash/` over the card and run it the same way as the installer. Each run
+makes `<card>/carplay_logs/NNN/` (numbered: the unit clock is often wrong; `info.txt` records the clock
+and whether verbose was on). It holds the `/tmp` logs (`*.log*`, `carplay_*`, `*.pid`, never the
+shared-memory objects that also live in `/tmp`), `sloginfo` of MMX and RCC, `pidin`, mounts, network,
+the hook and jar listing, the two configs we patch and cores of `dio_manager`, `maneuver_render` and
+`smartphone_integrator`. A read-only card is remounted writable. The run ends by creating
+`/tmp/carplay_verbose`, so: run once, reconnect the phone and use CarPlay, run again to save the
+verbose session. The marker is in RAM and goes away on reboot; the Java log reads it only at j9 start,
+the hook on each phone connect. Nothing is deleted on the unit. Checked by `scripts/test_logging_mib.sh`.
+
 ## ⚠️ Traps
 
 **Never restart the Java stack on a live unit.** `carplay_hook.jar` sits on j9's `-Xbootclasspath`, so
 it does nothing until the JVM restarts, and killing j9 counts as a critical-process death that
 restarts the whole system (about 50 s, screen black). A redeployed `libcarplay_hook.so` is picked up by
 the next `dio_manager` generation; the jar only by a reboot.
+
+**A card written from a Mac carries `._name` and `.DS_Store` files.** `custom.sh` skips them, so an
+AppleDouble `._carplay_hook.jar` never lands on j9's boot classpath.
 
 **The unit's shell is bare QNX 6.5.** Pushing files over SSH (the host-side snippets above) fails in
 predictable ways:

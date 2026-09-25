@@ -82,7 +82,7 @@ features below follow it automatically.
 | `maneuver_render/` | GLES maneuver overlay renderer (C, plus the C++11 `scene/` engine) |
 | `common/` | Shared QNX Screen surface code |
 | `deploy/smartphone_integrator/` | Runtime scripts and child-process configuration for the HU |
-| `install_MoreIncredibleBash/`, `uninstall_MoreIncredibleBash/` | M.I.B. custom scripts that install / remove a staged release |
+| `install_MoreIncredibleBash/`, `uninstall_MoreIncredibleBash/`, `logging_MoreIncredibleBash/` | M.I.B. custom scripts that install / remove a staged release / collect logs |
 | `scripts/` | Docker build entry points (Java / hook / renderer) and host test runners |
 | `tests/` | Host tests (C, Java, Python) for the hook, Java bridge and renderer |
 | `toolchain/qnx65-abi/` | QNX Screen ABI headers used only for cross-compilation |
@@ -208,6 +208,11 @@ touch /mnt/app/carplay_verbose        # or /tmp/carplay_verbose
 ```
 
 Remove the marker to return to the quiet default. Logs reset on reboot, so pull them before restarting.
+
+**No shell? Use M.I.B.** Copy `logging_MoreIncredibleBash/` to the card and run it like the installer.
+Each run saves everything to `<card>/carplay_logs/NNN/` and then creates `/tmp/carplay_verbose`: run it
+once, reconnect the phone and drive with CarPlay, run it again - the second folder holds the verbose
+session. Attach that folder to a bug report.
 For raw route-guidance packet dumps, rebuild the hook with `LOG_RGD_PACKET_RAW=1` (see [Build](#-build)).
 
 ## 📚 Documentation

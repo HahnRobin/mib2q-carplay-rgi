@@ -149,7 +149,7 @@ for f in "$RES"/*; do
 done
 if [ -d "$ROOT" ]; then
     ( cd "$ROOT" && find . -type f ) 2>/dev/null | while IFS= read -r f; do
-        case $f in *.DS_Store) continue ;; esac
+        case $f in */._*|*/.DS_Store) continue ;; esac   # macOS junk from a Mac-written card
         printf '%s|%s\n' "$ROOT/${f#./}" "/${f#./}"
     done >> "$LIST"
 fi
