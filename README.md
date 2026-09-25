@@ -120,12 +120,12 @@ ELF binds the unit's real Screen/EGL/GLES libraries at runtime. The renderer's C
 built with that image's `g++` and must not pull in the C++ runtime; the hook build rejects any dynamic
 export beyond its five interposers. There are no Java variants.
 
-The hook logs by default. To adjust at build time:
+There is one hook image: logging is always compiled in, WARN/ERROR by default, INFO with the
+`carplay_verbose` marker (see [Logging](#-logging)). The only build-time switch is for debugging:
 
 ```sh
-./scripts/build_hook.sh                        # LOG=1, logging compiled in (default)
-LOG=0 ./scripts/build_hook.sh                  # strip logging entirely
-LOG_RGD_PACKET_RAW=1 ./scripts/build_hook.sh   # + raw RGD packet hex dumps (needs LOG=1)
+./scripts/build_hook.sh                        # production image
+LOG_RGD_PACKET_RAW=1 ./scripts/build_hook.sh   # + raw RGD packet hex dumps
 ```
 
 ### Tests

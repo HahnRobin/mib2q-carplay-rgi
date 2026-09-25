@@ -148,7 +148,7 @@ static inline void log_hexdump(log_level_t level, const char* module, const char
 
 /* True when /mnt/app/carplay_verbose or /tmp/carplay_verbose existed at the first call
  * (checked once per process, i.e. per dio_manager session).  It lifts the log to INFO.
- * Without it a LOG=1 build logs WARN/ERROR only. */
+ * Without it the hook logs WARN/ERROR only. */
 bool log_verbose(void);
 
 /* Dump binary data to file (for debugging) */

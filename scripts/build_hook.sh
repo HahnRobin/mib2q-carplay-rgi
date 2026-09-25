@@ -5,9 +5,8 @@
 # (https://github.com/luka-dev/qnx65-armv7-toolchain, GCC 8.5).  The hook links only -lz -lsocket (both in the SDP), so no BSP
 # import stubs are needed.
 #
-#   ./scripts/build_hook.sh                        # default (LOG=1)
-#   LOG=0 ./scripts/build_hook.sh                  # logging disabled
-#   LOG_RGD_PACKET_RAW=1 ./scripts/build_hook.sh   # raw RGD logging (needs LOG=1)
+#   ./scripts/build_hook.sh                        # the one production image
+#   LOG_RGD_PACKET_RAW=1 ./scripts/build_hook.sh   # + raw RGD packet hex dumps
 #
 # NOTE: this is GCC 8.5, not the stock QNX 4.4.2.  The hook uses no __thread
 # (verified) so the emutls trap does not apply; the build asserts emutls==0 below.
@@ -21,14 +20,13 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT="$PROJECT_DIR/build/libcarplay_hook.so"
 mkdir -p "$(dirname "$OUT")"
 
-LOG="${LOG:-1}"
+# One production image: logging compiled in, WARN only, INFO behind carplay_verbose.
+# The old LOG=0 variant is gone.
+[ "${LOG:-}" = 0 ] && { echo "LOG=0 is gone: the hook always logs WARN; touch carplay_verbose for more"; exit 1; }
 LOG_RGD_PACKET_RAW="${LOG_RGD_PACKET_RAW:-0}"
-[[ "$LOG" == "0" || "$LOG" == "1" ]] || { echo "Invalid LOG=$LOG (0|1)"; exit 1; }
 [[ "$LOG_RGD_PACKET_RAW" == "0" || "$LOG_RGD_PACKET_RAW" == "1" ]] || { echo "Invalid LOG_RGD_PACKET_RAW"; exit 1; }
-[[ "$LOG_RGD_PACKET_RAW" == "1" && "$LOG" != "1" ]] && { echo "LOG_RGD_PACKET_RAW=1 requires LOG=1"; exit 1; }
 
 CFLAGS_EXTRA="-D__QNX__"
-[ "$LOG" == "0" ] && CFLAGS_EXTRA="$CFLAGS_EXTRA -DENABLE_LOGGING=0" && echo "Logging DISABLED"
 [ "$LOG_RGD_PACKET_RAW" == "1" ] && CFLAGS_EXTRA="$CFLAGS_EXTRA -DRGD_TRACE_RAW_FULL=1" && echo "RGD raw packet logging ENABLED"
 
 if ! docker image inspect "$IMG" >/dev/null 2>&1; then
