@@ -80,7 +80,7 @@ features below follow it automatically.
 | `java_patch/` | The only supported Java patch source |
 | `java_resources/` | Resources packed into the jar (VC glyph-width / Unicode table `vc-text.bin`) |
 | `maneuver_render/` | GLES maneuver overlay renderer (C, plus the C++11 `scene/` engine) |
-| `common/` | Shared QNX Screen surface code |
+| `common/` | Shared renderer code: QNX Screen surface, GL program-binary cache, log timestamps |
 | `deploy/smartphone_integrator/` | Runtime scripts and child-process configuration for the HU |
 | `install_MoreIncredibleBash/`, `uninstall_MoreIncredibleBash/`, `logging_MoreIncredibleBash/` | M.I.B. custom scripts that install / remove a staged release / collect logs |
 | `scripts/` | Docker build entry points (Java / hook / renderer) and host test runners |
@@ -133,7 +133,7 @@ LOG_RGD_PACKET_RAW=1 ./scripts/build_hook.sh   # + raw RGD packet hex dumps
 Host-only, no unit needed:
 
 ```sh
-./scripts/run_tests.sh            # C tests: RGD parser, bus, signal guard, protocol constants
+./scripts/run_tests.sh            # C + shell: RGD parser, bus, cover art, shader cache, installer, supervisor
 ./scripts/test_route_info.sh      # Java route-guidance / BAP bridge against the stock interfaces
 ./scripts/test_java_transports.sh # Java bus + renderer sockets, touchpad
 ./scripts/test_maneuver_native.sh # renderer engine + lanes (macOS, ASan/UBSan)
@@ -171,10 +171,11 @@ iOS sends route guidance and the SDK silently drops it.
 **With M.I.B. (recommended).** Copy `install_MoreIncredibleBash/` to the M.I.B. SD card and drop
 **all assets of a release** straight into `mod/carplay/` (the eight files above plus
 `carplay_child.json`; no folders needed), then run **GEM -> M.I.B. -> Advanced Settings -> Run Custom Script** (**Run individual script** on
-M.I.B. release zips up to V3.7.1) with CarPlay disconnected. `custom.sh`
-copies the tree with atomic renames, patches both configs in place and keeps a `.carplay-stock`
-backup of each; it never stops processes or reboots. To remove everything, run
-`uninstall_MoreIncredibleBash/` the same way.
+M.I.B. release zips up to V3.7.1) with CarPlay disconnected. `custom.sh` checks that the whole
+release is on the card (a partial copy stops before anything is written), copies it with atomic
+renames, patches both configs in place and keeps a `.carplay-stock` backup of each; it never stops
+processes or reboots. It also deletes M.I.B.'s NavActiveIgnore jar, which breaks CarPlay's app
+state. To remove everything, run `uninstall_MoreIncredibleBash/` the same way.
 
 **Manually** (no M.I.B.; needs a root shell on the unit over SSH or Telnet). `mount -uw /mnt/app` and `/mnt/system`, copy the files, back up and
 edit the two configs as text (`dio_manager.json` has `##` comment lines - no JSON tools).
@@ -193,27 +194,34 @@ Exact ownership rules, the `LD_PRELOAD`/env constraints and the MU1316 QNX-compa
 
 ## 📝 Logging
 
-Both sides write to `/tmp` on the unit:
+Everything logs to `/tmp` on the unit:
 
 | File | Source |
 | --- | --- |
 | `/tmp/carplay_hook.log` | native hook (inside `dio_manager`) |
 | `/tmp/carplay_java.log` | Java patch (bounded + rotated, `.1` = previous) |
+| `/tmp/maneuver_render.log` | cluster maneuver renderer |
+| `/tmp/carplay_wrapper.log` | startup wrapper and renderer monitor |
 
-By default only warnings and errors are recorded. To capture **everything** (lift both hook and Java to
-`INFO`), drop a marker file on the unit - no rebuild, no restart of `dio_manager` needed:
+By default only warnings and errors are recorded. To capture **everything** (lift hook and Java to
+`INFO`), drop a marker file on the unit - no rebuild needed:
 
 ```sh
-touch /mnt/app/carplay_verbose        # or /tmp/carplay_verbose
+touch /mnt/app/carplay_verbose        # survives reboot; /tmp/carplay_verbose does not
 ```
 
-Remove the marker to return to the quiet default. Logs reset on reboot, so pull them before restarting.
+The hook reads the marker once per `dio_manager` session, so it takes effect on the next phone
+connect. The Java patch reads it only when j9 starts, so for a verbose Java log use the `/mnt/app`
+marker and reboot. Remove the marker to return to the quiet default. Logs reset on reboot, so pull
+them before restarting.
+
+For raw route-guidance packet dumps, rebuild the hook with `LOG_RGD_PACKET_RAW=1` (see [Build](#-build)).
 
 **No shell? Use M.I.B.** Copy `logging_MoreIncredibleBash/` to the card and run it like the installer.
 Each run saves everything to `<card>/carplay_logs/NNN/` and then creates `/tmp/carplay_verbose`: run it
 once, reconnect the phone and drive with CarPlay, run it again - the second folder holds the verbose
-session. Attach that folder to a bug report.
-For raw route-guidance packet dumps, rebuild the hook with `LOG_RGD_PACKET_RAW=1` (see [Build](#-build)).
+session (hook and renderer; the Java log stays quiet until a reboot with `/mnt/app/carplay_verbose`).
+Attach that folder to a bug report.
 
 ## 📚 Documentation
 
